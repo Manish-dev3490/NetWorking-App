@@ -1,4 +1,26 @@
+import { constants as zlibConstants } from 'node:zlib';
 import { HttpError } from '../shared/http-error.js';
+
+const brotliFormatErrors = new Set(
+  Object.entries(zlibConstants)
+    .filter(([name]) => name.startsWith('BROTLI_DECODER_ERROR_FORMAT_'))
+    .map(([, errno]) => errno),
+);
+
+function isCompressedBodyError(error, req) {
+  const encoding = req.get('Content-Encoding')?.toLowerCase();
+  // body-parser wraps native decoder failures with status 400 and no error.type.
+  return error.status === 400
+    && !error.type
+    && ['gzip', 'deflate', 'br', 'zstd'].includes(encoding)
+    && Number.isInteger(error.errno)
+    && typeof error.code === 'string'
+    && (
+      ['Z_DATA_ERROR', 'Z_BUF_ERROR', 'Z_NEED_DICT'].includes(error.code)
+      || (encoding === 'br' && brotliFormatErrors.has(error.errno))
+      || (encoding === 'zstd' && error.code.startsWith('ZSTD_error_'))
+    );
+}
 
 export function errorHandler(error, req, res, next) {
   if (res.headersSent) {
@@ -23,6 +45,10 @@ export function errorHandler(error, req, res, next) {
     message = 'Use a supported JSON content type, charset, and encoding.';
   } else if (error instanceof HttpError) {
     ({ status, code, message } = error);
+  } else if (isCompressedBodyError(error, req)) {
+    status = 400;
+    code = 'BAD_REQUEST';
+    message = 'The request body must contain valid compressed JSON.';
   }
 
   if (status >= 500) {

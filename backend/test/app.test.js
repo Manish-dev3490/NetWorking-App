@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import test from 'node:test';
+import * as zlib from 'node:zlib';
 import { createApp } from '../src/app.js';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -101,6 +102,87 @@ test('malformed JSON returns a safe 400 error', async (t) => {
   });
   const body = await errorResponse(response, 400, 'BAD_REQUEST');
   assert.doesNotMatch(JSON.stringify(body), /request-secret|SyntaxError|stack/);
+});
+
+for (const [encoding, compress] of [
+  ['gzip', zlib.gzipSync],
+  ['deflate', zlib.deflateSync],
+  ['br', zlib.brotliCompressSync],
+]) {
+  for (const scenario of ['malformed', 'truncated']) {
+    test(`${scenario} ${encoding} bodies return a safe 400 error`, async (t) => {
+      const origin = await serve(t);
+      const compressed = compress('{"value":"request-secret"}');
+      const requestBody = scenario === 'malformed'
+        ? Buffer.from('invalid-compression-secret')
+        : compressed.subarray(0, 4);
+      const response = await fetch(`${origin}/api/v1/not-implemented`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Encoding': encoding },
+        body: requestBody,
+      });
+      const body = await errorResponse(response, 400, 'BAD_REQUEST');
+      assert.doesNotMatch(
+        JSON.stringify(body),
+        /request-secret|compression-secret|header check|end of file|Decompression|errno|stack|Z_DATA_ERROR|Z_BUF_ERROR|ERR__ERROR/,
+      );
+    });
+  }
+
+  test(`valid ${encoding} JSON reaches routing`, async (t) => {
+    const origin = await serve(t);
+    const response = await fetch(`${origin}/api/v1/not-implemented`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Encoding': encoding },
+      body: compress('{"value":"example"}'),
+    });
+    await errorResponse(response, 404, 'NOT_FOUND');
+  });
+
+  test(`${encoding} bodies exceeding the decompressed JSON limit return 413`, async (t) => {
+    const origin = await serve(t);
+    const response = await fetch(`${origin}/api/v1/not-implemented`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Encoding': encoding },
+      body: compress(jsonBodyOfSize(32 * 1024 + 1)),
+    });
+    await errorResponse(response, 413, 'PAYLOAD_TOO_LARGE');
+  });
+}
+
+test('Brotli bodies with invalid window bits return a safe 400 error', async (t) => {
+  const origin = await serve(t);
+  const response = await fetch(`${origin}/api/v1/not-implemented`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'br' },
+    body: Buffer.from([0x11, 0x00]),
+  });
+  const body = await errorResponse(response, 400, 'BAD_REQUEST');
+  assert.doesNotMatch(JSON.stringify(body), /WINDOW_BITS|errno|stack|Decompression/);
+});
+
+test('malformed zstd bodies return a safe 400 error when supported by Node', {
+  skip: typeof zlib.createZstdDecompress !== 'function' && 'This Node version does not support zstd.',
+}, async (t) => {
+  const origin = await serve(t);
+  const response = await fetch(`${origin}/api/v1/not-implemented`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'zstd' },
+    body: 'invalid-compression-secret',
+  });
+  const body = await errorResponse(response, 400, 'BAD_REQUEST');
+  assert.doesNotMatch(JSON.stringify(body), /compression-secret|frame descriptor|ZSTD_error|errno|stack/);
+});
+
+test('unsupported JSON compression returns a safe 415 error', async (t) => {
+  const origin = await serve(t);
+  const response = await fetch(`${origin}/api/v1/not-implemented`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'unsupported-encoding' },
+    body: '{}',
+  });
+  const body = await errorResponse(response, 415, 'UNSUPPORTED_MEDIA_TYPE');
+  assert.doesNotMatch(JSON.stringify(body), /unsupported-encoding|stack/);
 });
 
 test('JSON at exactly 32 KiB reaches routing', async (t) => {

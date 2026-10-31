@@ -1,6 +1,20 @@
 # Social App
 
-Initial JavaScript MERN scaffold for an authenticated, photo-first social application. The product name is a working label. React and Vite provide the browser shell; Express runs as one modular monolith; Mongoose manages a reusable MongoDB connection. This repository currently implements foundation code and health checks only.
+JavaScript MERN foundation for an authenticated, photo-first social application. The homepage uses **Gather** as its working visual identity. React and Vite provide the browser UI; Express runs as one modular monolith; Mongoose manages a reusable MongoDB connection. The repository includes the backend foundation and a responsive homepage design preview.
+
+## Homepage preview
+
+The homepage follows the supplied Gather reference: forest green and sage, a warm off-white canvas, Inter typography, white photo cards, left navigation and a contextual right sidebar. Desktop uses three columns, tablet uses a compact navigation rail, and mobile uses a single feed with top and bottom navigation.
+
+Run `npm.cmd run dev:frontend` and open `http://localhost:5173`. The homepage works without a running backend. The visible **Design preview** label identifies fictional sample people, posts and counts. Following/Recent tabs, local feed search, photo carousels, likes, saves, sample comments and suggested follows are browser UI demonstrations; their state survives switching preview views and resets on refresh. Create post, Explore, account settings and other future pages show clear coming-next dialogs. No authentication, real publishing or feature API requests have been added.
+
+UI code lives in `frontend/src/pages/HomePage.jsx`, `frontend/src/components/`, and `frontend/src/features/feed/`. Sample data is isolated in `preview-data.js` for replacement by API data later. The supplied design's story-like row is represented as people in **Your circle**; stories, reposts and ranked discovery remain outside V1.
+
+The design references contain differing token values. This implementation uses green `#496657`, deep green `#324e40`, canvas `#f7f8f6`, sage `#eaf0eb`, text `#252b29`, muted text `#69736d`, borders `#e1e6e1`, 16px cards and 12px controls. These are reusable CSS variables in `global.css`; no component-library dependency was added.
+
+Preview photos and portraits use the exact public image URLs from the provided design exports (`lh3.googleusercontent.com`), and Inter loads from Google Fonts. These assets require internet access; image and font fallbacks keep the layout usable when unavailable. Preview asset download was blocked in the development sandbox. Real product media will use the documented authorized backend delivery instead.
+
+The frontend scripts use Vite's native loader for the JavaScript configuration. This also avoids unnecessary configuration bundling that is blocked by parent-directory access restrictions in the Windows sandbox. The usual root commands (`npm.cmd run dev:frontend`, `npm.cmd run build`, `npm.cmd run preview`) work with this setting.
 
 The first release will cover email authentication, profiles and privacy, follows, photo posts, engagement, saved collections, feed/search, polling notifications, moderation and text-based AI captions. Chat, calls, video/reels, stories, image understanding and broader AI workflows are deferred.
 
@@ -37,14 +51,14 @@ Open decisions that do not block this scaffold:
 │   ├── public/
 │   ├── src/
 │   │   ├── app/                  Future app composition
-│   │   ├── components/           Future shared UI
-│   │   ├── features/             Future feature code
-│   │   ├── pages/                Future route screens
+│   │   ├── components/           Shared icons, avatars and accessible dialog
+│   │   ├── features/feed/        Reusable post cards and isolated sample data
+│   │   ├── pages/HomePage.jsx    Responsive homepage preview
 │   │   ├── services/api.js       Credentialed JSON client; no automatic requests
 │   │   ├── hooks/
 │   │   ├── styles/global.css
 │   │   ├── utils/
-│   │   ├── App.jsx               Neutral responsive placeholder
+│   │   ├── App.jsx               Homepage entry
 │   │   └── main.jsx
 │   ├── .env.example
 │   ├── index.html
@@ -130,7 +144,7 @@ Start the frontend in another terminal:
 npm.cmd run dev:frontend
 ```
 
-Open `http://localhost:5173`. Vite uses a strict port and proxies `/api` and `/health` to `http://127.0.0.1:3000`. If you change the backend host/port, update that development proxy too. The placeholder runs independently of backend availability and makes no network requests. Stop foreground servers with Ctrl+C; the backend closes HTTP and MongoDB resources with a bounded shutdown deadline.
+Open `http://localhost:5173`. Vite uses a strict port and proxies `/api` and `/health` to `http://127.0.0.1:3000`. If you change the backend host/port, update that development proxy too. The homepage runs independently of backend availability and makes no feature API requests. Fonts and preview images load from the external hosts listed above. Stop foreground servers with Ctrl+C; the backend closes HTTP and MongoDB resources with a bounded shutdown deadline.
 
 For non-watch backend startup:
 
@@ -175,8 +189,8 @@ Without `TEST_MONGODB_URI`, that integration test explicitly skips. A passing is
 
 ## Scaffold boundary and next milestone
 
-Implemented: workspace/tooling configuration, light React shell, credentialed JSON API-client foundation, environment validation, reusable small-pool MongoDB connection, health routes, API transport/error foundation and process lifecycle. Feature directories establish ownership without empty controller/service/repository files.
+Implemented: workspace/tooling configuration, responsive homepage UI preview and reusable frontend components, credentialed JSON API-client foundation, environment validation, reusable small-pool MongoDB connection, health routes, API transport/error foundation and process lifecycle. Backend feature directories establish ownership without empty controller/service/repository files.
 
-Not implemented: authentication/session business logic, feature schemas/index migrations, profiles/follows, uploads/posts, engagement/saves, feeds/search, notifications/outbox workers, AI integrations, moderation, or later-phase chat/calls/reels. There are no provider adapters, mocks, Redis, Docker, CI/CD, queues or deployment resources.
+Not implemented: authentication/session business logic, feature schemas/index migrations, persisted profiles/follows, uploads/posts, engagement/saves, feed/search APIs, notifications/outbox workers, AI integrations, moderation, or later-phase chat/calls/reels. Sample homepage data is a visual preview, without an API mock server. There are no provider adapters, Redis, Docker, CI/CD, queues or deployment resources.
 
 After scaffold review, resolve CSRF and the development HTTPS/cookie setup, then implement the documented **register → verify email → sign in → edit profile → sign out** slice. Define request-validation schemas and OpenAPI contracts for that slice, use transaction-capable MongoDB, and verify expiry/revocation, restricted accounts, unauthorized access and error recovery.
