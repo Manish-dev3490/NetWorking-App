@@ -1,0 +1,29 @@
+{
+  "name": "networking-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0",
+    "npm": ">=10"
+  },
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace=@networking-app/frontend",
+    "dev:backend": "npm run dev --workspace=@networking-app/backend",
+    "start": "npm run start --workspace=@networking-app/backend",
+    "build": "npm run build --workspace=@networking-app/frontend",
+    "preview": "npm run preview --workspace=@networking-app/frontend",
+    "lint": "eslint .",
+    "test": "npm run test --workspace=@networking-app/backend"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0"
+  }
+}

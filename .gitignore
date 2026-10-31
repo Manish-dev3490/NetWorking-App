@@ -1,0 +1,22 @@
+# Dependencies and npm's workspace-local cache
+node_modules/
+.npm-cache/
+
+# Real environment files; examples contain public placeholders only
+.env
+.env.*
+!.env.example
+
+# Generated outputs and local logs
+dist/
+build/
+coverage/
+*.log
+*.pid
+*.tsbuildinfo
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
