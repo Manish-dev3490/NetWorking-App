@@ -23,6 +23,7 @@ const shapes = {
   palette: <><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 1.2-3.6 1.8 1.8 0 0 1 1-3.3H18a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z" /><circle cx="7" cy="11" r=".6" /><circle cx="10" cy="7" r=".6" /><circle cx="15" cy="7" r=".6" /><circle cx="7.5" cy="15" r=".6" /></>,
   building: <path d="M5 21V5l10-2v18M3 21h18M15 10h4v11M8 8h1m2-1h1m-4 5h1m2-1h1m-4 5h1m2-1h1" />,
   send: <><path d="m22 2-7 20-4-9-9-4L22 2Z" /><path d="m22 2-11 11" /></>,
+  logout: <><path d="M9 4H4v16h5M13 12h8m-4-4 4 4-4 4" /></>,
 };
 
 export default function Icon({ name, size = 20, ...props }) {

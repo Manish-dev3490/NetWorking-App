@@ -4,8 +4,10 @@ import { notFound } from './middleware/not-found.js';
 import { requestId } from './middleware/request-id.js';
 import { requireJson } from './middleware/require-json.js';
 import { apiRoutes } from './routes.js';
+import { createAuthRouter } from './modules/auth/routes.js';
+import { createAuthSecurity } from './middleware/auth-security.js';
 
-export function createApp({ database }) {
+export function createApp({ database, authService, config }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(requestId);
@@ -28,9 +30,11 @@ export function createApp({ database }) {
     res.status(available ? 200 : 503).json({ status: available ? 'ready' : 'unavailable' });
   });
 
-  // Same-origin browser access is supplied by Vite locally and hosting later.
-  // Resolve the documented CSRF policy before adding any mutation endpoints.
-  app.use('/api/v1', requireJson, express.json({ limit: 32 * 1024 }), apiRoutes);
+  app.use('/api/v1', requireJson, express.json({ limit: 32 * 1024 }));
+  if (authService) {
+    app.use('/api/v1', createAuthSecurity({ config }), createAuthRouter({ authService }));
+  }
+  app.use('/api/v1', apiRoutes);
   app.use(notFound);
   app.use(errorHandler);
 

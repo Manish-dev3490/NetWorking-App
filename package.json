@@ -19,7 +19,9 @@
     "build": "npm run build --workspace=@networking-app/frontend",
     "preview": "npm run preview --workspace=@networking-app/frontend",
     "lint": "eslint .",
-    "test": "npm run test --workspace=@networking-app/backend"
+    "test": "npm run test --workspace=@networking-app/backend",
+    "test:integration": "npm run test:integration --workspace=@networking-app/backend",
+    "db:migrate": "npm run migrate --workspace=@networking-app/backend"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

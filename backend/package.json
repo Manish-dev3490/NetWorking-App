@@ -10,7 +10,9 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "lint": "eslint .",
-    "test": "node --test"
+    "test": "node --test",
+    "test:integration": "node src/scripts/integration-runner.js",
+    "migrate": "node src/scripts/migrate.js"
   },
   "dependencies": {
     "express": "^5.1.0",

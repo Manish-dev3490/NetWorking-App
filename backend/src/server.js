@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { createApp } from './app.js';
 import { createDatabase } from './config/database.js';
 import { loadConfig } from './config/env.js';
+import { createAuthService } from './modules/auth/service.js';
+import { assertAuthMigration } from './migrations/001-auth.js';
 
 const database = createDatabase();
 let server;
@@ -64,8 +66,11 @@ async function start() {
   stage = 'database';
   await database.connect(config.mongoUri);
   if (!stopping) {
+    stage = 'authentication';
+    await assertAuthMigration(database.connection);
+    const authService = createAuthService({ connection: database.connection });
     stage = 'http';
-    server = createServer(createApp({ database }));
+    server = createServer(createApp({ database, authService, config }));
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(config.port, config.host, () => {
@@ -91,6 +96,7 @@ try {
   const messages = {
     configuration: error.message,
     database: 'MongoDB connection failed. Check MONGODB_URI, database availability, credentials, and network access.',
+    authentication: 'Authentication initialization failed. Check the auth database migration.',
     http: 'HTTP startup failed. Check HOST, PORT, and whether the port is already in use.',
   };
   console.error(`Startup failed: ${messages[stage]}`);

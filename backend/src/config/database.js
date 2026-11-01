@@ -7,6 +7,8 @@ export function createDatabase() {
   connection.on('error', () => {});
 
   return {
+    connection,
+
     async connect(uri) {
       await connection.openUri(uri, {
         maxPoolSize: 5,

@@ -3,7 +3,7 @@ import Avatar from '../components/Avatar.jsx';
 import Dialog from '../components/Dialog.jsx';
 import Icon from '../components/Icon.jsx';
 import PostCard from '../features/feed/PostCard.jsx';
-import { circle, collections, currentUser, posts, suggestions } from '../features/feed/preview-data.js';
+import { circle, collections, posts, suggestions } from '../features/feed/preview-data.js';
 
 const navigation = [
   { name: 'Home', icon: 'home' }, { name: 'Explore', icon: 'explore' },
@@ -28,7 +28,8 @@ function Brand({ onClick }) {
   </button>;
 }
 
-export default function HomePage() {
+export default function HomePage({ user, onEditProfile, onLogout, loggingOut = false }) {
+  const currentUser = { ...user, name: user.displayName, handle: user.username };
   const [view, setView] = useState('Home');
   const [tab, setTab] = useState(() => posts.some((post) => window.location.hash === `#post-${post.id}`) ? 'recent' : 'following');
   const [postPreviewStates, setPostPreviewStates] = useState(() => Object.fromEntries(posts.map((post) => [post.id, {
@@ -80,7 +81,7 @@ export default function HomePage() {
     if (name === 'Home') goHome();
     else if (name === 'Saved') { setView('Saved'); setQuery(''); setSearchOpen(false); window.scrollTo({ top: 0, behavior: 'instant' }); }
     else if (name === 'Search') setSearchOpen(true);
-    else if (name === 'Profile') showPerson(currentUser);
+    else if (name === 'Profile') onEditProfile();
     else showUpcoming(name);
   }
   function toggleSaved(id) {
@@ -134,12 +135,15 @@ export default function HomePage() {
         </button>
       </div>
       <div className="sidebar-bottom">
-        <button type="button" className="account-button" onClick={() => showPerson(currentUser)} title="Your profile">
+        <button type="button" className="account-button" onClick={onEditProfile} title="Your profile">
           <Avatar src={currentUser.avatar} name={currentUser.name} size={38} />
           <span className="account-copy"><strong>{currentUser.name}</strong><span>@{currentUser.handle}</span></span><Icon name="more" size={18} />
         </button>
-        <button type="button" className="nav-link settings-link" onClick={() => showUpcoming('Settings')} title="Settings">
-          <Icon name="settings" size={20} /><span className="nav-label">Settings</span>
+        <button type="button" className="nav-link settings-link" onClick={onEditProfile} title="Edit profile">
+          <Icon name="settings" size={20} /><span className="nav-label">Edit profile</span>
+        </button>
+        <button type="button" className="nav-link" onClick={onLogout} disabled={loggingOut} title="Log out" aria-label={loggingOut ? 'Logging out' : 'Log out'}>
+          <Icon name="logout" size={20} /><span className="nav-label">{loggingOut ? 'Logging out…' : 'Log out'}</span>
         </button>
       </div>
     </aside>
@@ -149,7 +153,8 @@ export default function HomePage() {
       <div className="mobile-header-actions">
         <button type="button" className="icon-button" aria-label="Search feed" onClick={() => navigate('Search')}><Icon name="search" /></button>
         <button type="button" className="icon-button" aria-label="Saved posts" onClick={() => navigate('Saved')}><Icon name="bookmark" /></button>
-        <button type="button" className="avatar-button" aria-label="Your profile" onClick={() => showPerson(currentUser)}><Avatar src={currentUser.avatar} name={currentUser.name} size={30} /></button>
+        <button type="button" className="avatar-button" aria-label="Your profile" onClick={onEditProfile}><Avatar src={currentUser.avatar} name={currentUser.name} size={30} /></button>
+        <button type="button" className="icon-button" aria-label={loggingOut ? 'Logging out' : 'Log out'} title="Log out" onClick={onLogout} disabled={loggingOut}><Icon name="logout" size={19} /></button>
       </div>
     </header>
 
@@ -175,12 +180,12 @@ export default function HomePage() {
             onKeyDown={(event) => { if (event.key === 'Escape') closeSearch(); }} />
           <button type="button" className="icon-button" aria-label="Close search" onClick={closeSearch}><Icon name="close" size={16} /></button>
         </div>}
-        <p className="preview-note"><span className="preview-dot" />Design preview <span aria-hidden="true">·</span> Sample content, interactions stay on this page</p>
+        <p className="preview-note"><span className="preview-dot" />Feed preview <span aria-hidden="true">·</span> Sample posts, feed interactions stay on this page</p>
         {view === 'Home' && !normalizedQuery && <section className="circle-section" aria-labelledby="circle-heading">
           <div className="section-heading"><h1 id="circle-heading">Your circle</h1><span>A little good company</span></div>
           <div className="circle-list">
             {[{ ...currentUser, id: 'you', shortName: 'You' }, ...circle].map((person) => <button key={person.id} type="button" className="circle-person"
-              onClick={() => showPerson(person)} aria-label={`View ${person.name}'s profile preview`}>
+              onClick={() => person.id === 'you' ? onEditProfile() : showPerson(person)} aria-label={person.id === 'you' ? 'Edit your profile' : `View ${person.name}'s profile preview`}>
               <span className="circle-avatar"><Avatar src={person.avatar} name={person.name} size={52} /></span><span>{person.shortName ?? person.name.split(' ')[0]}</span>
             </button>)}
           </div>
@@ -206,14 +211,15 @@ export default function HomePage() {
       </main>
 
       <aside className="context-rail" aria-label="Your profile and community">
-        <section className="context-card profile-card" aria-label="Your profile preview">
-          <button type="button" className="profile-summary" onClick={() => showPerson(currentUser)}><Avatar src={currentUser.avatar} name={currentUser.name} size={43} />
+        <section className="context-card profile-card" aria-label="Your profile">
+          <button type="button" className="profile-summary" onClick={onEditProfile}><Avatar src={currentUser.avatar} name={currentUser.name} size={43} />
             <span><strong>{currentUser.name}</strong><span>@{currentUser.handle}</span></span>
           </button>
-          <div className="profile-stats">{Object.entries(currentUser.stats).map(([name, count]) => <div key={name}><strong>{count}</strong><span>{name[0].toUpperCase() + name.slice(1)}</span></div>)}</div>
+          <p className="member-bio">{user.bio || 'Make yourself at home. Add a few words about you.'}</p>
+          <button type="button" className="button button-secondary member-edit" onClick={onEditProfile}>Edit your profile</button>
         </section>
         <section className="context-card collections-card" aria-labelledby="collections-heading">
-          <div className="card-heading"><h2 id="collections-heading">Your collections</h2><button type="button" className="text-button" onClick={() => navigate('Saved')}>View all</button></div>
+          <div className="card-heading"><h2 id="collections-heading">Sample collections</h2><button type="button" className="text-button" onClick={() => navigate('Saved')}>View all</button></div>
           <div className="collection-list">{collections.map((collection) => <button key={collection.id} type="button" className="collection-row" onClick={() => {
             navigate('Saved'); notify('Showing all saved preview posts. Collection management is coming next.');
           }}><span className="collection-icon"><Icon name={collection.icon} size={17} /></span><span>{collection.name}</span><span className="collection-count">{collection.count} items</span></button>)}</div>

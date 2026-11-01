@@ -55,5 +55,8 @@ export function errorHandler(error, req, res, next) {
     console.error(JSON.stringify({ requestId: req.requestId, code }));
   }
 
-  res.status(status).json({ error: { code, message }, meta: { requestId: req.requestId } });
+  const details = { code, message };
+  if (error instanceof HttpError && Array.isArray(error.fields)) details.fields = error.fields;
+  if (error instanceof HttpError && error.retryAt) details.retryAt = error.retryAt;
+  res.status(status).json({ error: details, meta: { requestId: req.requestId } });
 }

@@ -7,6 +7,8 @@ export function readConfig(env = process.env) {
   const portValue = env.PORT ?? '3000';
   const host = env.HOST ?? '127.0.0.1';
   const mongoUri = env.MONGODB_URI?.trim();
+  const authSecret = env.AUTH_SECRET?.trim();
+  let appOrigin;
 
   if (!['development', 'test', 'production'].includes(nodeEnv)) {
     errors.push('NODE_ENV must be development, test, or production.');
@@ -26,11 +28,25 @@ export function readConfig(env = process.env) {
     errors.push('MONGODB_URI must be a mongodb:// or mongodb+srv:// connection string.');
   }
 
+  if (!authSecret || !/^[a-f0-9]{64}$/i.test(authSecret)) {
+    errors.push('AUTH_SECRET must contain 64 random hexadecimal characters.');
+  }
+
+  try {
+    const url = new URL(env.APP_ORIGIN ?? (nodeEnv === 'production' ? '' : 'http://localhost:5173'));
+    const localHttp = nodeEnv !== 'production' && url.protocol === 'http:' && url.hostname === 'localhost';
+    if ((!localHttp && url.protocol !== 'https:') || url.username || url.password
+      || url.pathname !== '/' || url.search || url.hash) throw new Error();
+    appOrigin = url.origin;
+  } catch {
+    errors.push('APP_ORIGIN must be an HTTPS origin, or http://localhost with a port for development.');
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid backend configuration:\n${errors.join('\n')}`);
   }
 
-  return Object.freeze({ nodeEnv, host: host.trim(), port: Number(portValue), mongoUri });
+  return Object.freeze({ nodeEnv, host: host.trim(), port: Number(portValue), mongoUri, authSecret, appOrigin });
 }
 
 export function loadConfig() {
