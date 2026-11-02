@@ -4,12 +4,16 @@ import { createDatabase } from './config/database.js';
 import { loadConfig } from './config/env.js';
 import { createAuthService } from './modules/auth/service.js';
 import { assertAuthMigration } from './migrations/001-auth.js';
+import { assertPostsMigration } from './migrations/002-posts.js';
+import { createPostService } from './modules/posts/service.js';
 
 const database = createDatabase();
 let server;
 let stopping = false;
 let shutdownTask;
 let stage = 'configuration';
+let orphanTimer;
+let orphanTask;
 
 function shutdown(exitCode = 0) {
   if (exitCode !== 0) {
@@ -19,6 +23,7 @@ function shutdown(exitCode = 0) {
     return shutdownTask;
   }
   stopping = true;
+  clearInterval(orphanTimer);
   process.exitCode ??= exitCode;
 
   shutdownTask = (async () => {
@@ -41,7 +46,9 @@ function shutdown(exitCode = 0) {
       console.error('HTTP cleanup failed during shutdown.');
       process.exitCode = 1;
     } finally {
+      clearInterval(orphanTimer);
       try {
+        await orphanTask?.catch(() => {});
         await database.close();
       } catch {
         console.error('Database cleanup failed during shutdown.');
@@ -69,8 +76,20 @@ async function start() {
     stage = 'authentication';
     await assertAuthMigration(database.connection);
     const authService = createAuthService({ connection: database.connection });
+    stage = 'posts';
+    await assertPostsMigration(database.connection);
+    const postService = createPostService({ connection: database.connection, cursorSecret: config.authSecret });
+    await postService.cleanupOrphans();
+    if (stopping) return;
+    orphanTimer = setInterval(() => {
+      if (orphanTask || stopping) return;
+      orphanTask = postService.cleanupOrphans().catch(() => {
+        console.error('Expired photo cleanup failed; it will be retried.');
+      }).finally(() => { orphanTask = undefined; });
+    }, 60_000);
+    orphanTimer.unref();
     stage = 'http';
-    server = createServer(createApp({ database, authService, config }));
+    server = createServer(createApp({ database, authService, postService, config }));
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(config.port, config.host, () => {
@@ -97,6 +116,7 @@ try {
     configuration: error.message,
     database: 'MongoDB connection failed. Check MONGODB_URI, database availability, credentials, and network access.',
     authentication: 'Authentication initialization failed. Check the auth database migration.',
+    posts: 'Post initialization failed. Run the database migrations and check MongoDB permissions.',
     http: 'HTTP startup failed. Check HOST, PORT, and whether the port is already in use.',
   };
   console.error(`Startup failed: ${messages[stage]}`);

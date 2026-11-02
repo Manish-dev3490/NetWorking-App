@@ -2,11 +2,11 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config/env.js';
 
-// Auth tests create and remove only their own randomly named gather_auth_test_ database.
+// Auth/post tests create and remove only their own randomly named test databases.
 // The configured application database is used solely for the existing ping test.
 try {
   const config = loadConfig();
-  const child = spawn(process.execPath, ['--test', 'test/auth-integration.test.js', 'test/database.test.js'], {
+  const child = spawn(process.execPath, ['--test', 'test/auth-integration.test.js', 'test/posts-integration.test.js', 'test/database.test.js'], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     stdio: 'inherit',
     env: { ...process.env, TEST_MONGODB_URI: process.env.TEST_MONGODB_URI || config.mongoUri },

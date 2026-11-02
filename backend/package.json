@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "express": "^5.1.0",
-    "mongoose": "^9.11.4"
+    "mongoose": "^9.11.4",
+    "sharp": "^0.35.5"
   }
 }

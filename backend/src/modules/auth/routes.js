@@ -1,16 +1,9 @@
 import { Router } from 'express';
 import { HttpError } from '../../shared/http-error.js';
+import { SESSION_COOKIE, sessionToken } from '../../shared/session-token.js';
 
-export const SESSION_COOKIE = '__Host-session';
+export { SESSION_COOKIE } from '../../shared/session-token.js';
 const cookieOptions = { httpOnly: true, secure: true, sameSite: 'lax', path: '/' };
-
-function sessionToken(req) {
-  const values = (req.headers.cookie ?? '').split(';')
-    .map((part) => part.trim()).filter((part) => part.startsWith(`${SESSION_COOKIE}=`));
-  if (values.length !== 1) return undefined;
-  try { return decodeURIComponent(values[0].slice(SESSION_COOKIE.length + 1)); }
-  catch { return undefined; }
-}
 
 function noBody(req) {
   if (req.body !== undefined && (!req.body || typeof req.body !== 'object'

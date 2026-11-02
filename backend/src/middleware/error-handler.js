@@ -39,7 +39,7 @@ export function errorHandler(error, req, res, next) {
     status = 400;
     code = 'BAD_REQUEST';
     message = 'The request body must contain valid JSON.';
-  } else if (error.status === 415) {
+  } else if (error.status === 415 && !(error instanceof HttpError)) {
     status = 415;
     code = 'UNSUPPORTED_MEDIA_TYPE';
     message = 'Use a supported JSON content type, charset, and encoding.';

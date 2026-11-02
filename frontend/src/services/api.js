@@ -64,7 +64,7 @@ async function getCsrfToken() {
 
 // Session cookies stay HttpOnly; only the CSRF request token is held in memory.
 export async function apiRequest(path, options = {}) {
-  const { method = 'GET', body, accountId, headers: customHeaders, ...requestOptions } = options;
+  const { method = 'GET', body, rawBody, accountId, headers: customHeaders, ...requestOptions } = options;
   const requestMethod = method.toUpperCase();
   const normalizedPath = path.replace(/^\/+/, '');
   const mutating = !safeMethods.has(requestMethod);
@@ -72,7 +72,8 @@ export async function apiRequest(path, options = {}) {
   headers.set('Accept', 'application/json');
   if (mutating) {
     headers.set('X-App-Request', 'web');
-    headers.set('Content-Type', 'application/json');
+    if (rawBody === undefined) headers.set('Content-Type', 'application/json');
+    else if (!headers.has('Content-Type')) headers.set('Content-Type', rawBody.type || 'application/octet-stream');
     // Keep the form's original account precondition across CSRF refreshes.
     if (accountId) headers.set('X-Account-Id', accountId);
   } else if (body !== undefined) headers.set('Content-Type', 'application/json');
@@ -80,15 +81,16 @@ export async function apiRequest(path, options = {}) {
   async function send(retryCsrf) {
     if (mutating) headers.set('X-CSRF-Token', await getCsrfToken());
     try {
+      const timeout = rawBody === undefined ? 15000 : 60000;
       const signal = requestOptions.signal
-        ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(15000)])
-        : AbortSignal.timeout(15000);
+        ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(timeout)])
+        : AbortSignal.timeout(timeout);
       const response = await fetch(`${apiBaseUrl}/${normalizedPath}`, {
         ...requestOptions, signal, method: requestMethod, headers, credentials: 'include',
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: rawBody === undefined ? (body === undefined ? undefined : JSON.stringify(body)) : rawBody,
       });
       const payload = await readResponse(response, requestMethod);
-      if (mutating && accountId && payload?.data?.id && payload.data.id !== accountId) {
+      if (mutating && normalizedPath === 'me/profile' && accountId && payload?.data?.id && payload.data.id !== accountId) {
         throw new ApiError('Your signed-in account changed. Please review the current account before saving.', {
           status: 409, code: 'ACCOUNT_CHANGED', requestId: payload.meta?.requestId,
         });

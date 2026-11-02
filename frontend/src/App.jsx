@@ -5,6 +5,8 @@ import ProfilePage from './features/auth/ProfilePage.jsx';
 import Icon from './components/Icon.jsx';
 import { apiRequest, clearCsrfToken } from './services/api.js';
 import { describeError } from './features/auth/form-utils.js';
+import PostComposer from './features/posts/PostComposer.jsx';
+import PostDetail from './features/posts/PostDetail.jsx';
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname);
@@ -15,7 +17,9 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [accountError, setAccountError] = useState('');
   const [loggingOut, setLoggingOut] = useState(false);
-  const returnToRef = useRef(window.location.pathname === '/profile' ? '/profile' : '/');
+  const [composerAccountId, setComposerAccountId] = useState(null);
+  const [postRevision, setPostRevision] = useState(0);
+  const returnToRef = useRef(window.location.pathname === '/profile' || /^\/p\/[0-9a-f]{24}$/i.test(window.location.pathname) ? window.location.pathname : '/');
   const userRef = useRef(user);
   const accountEpochRef = useRef(0);
   const profileVersionRef = useRef(0);
@@ -61,7 +65,7 @@ export default function App() {
         }
       }
       updateAccount(response.data);
-      if (window.location.pathname !== '/profile' && (initial || changed)) {
+      if (window.location.pathname !== '/profile' && !/^\/p\/[0-9a-f]{24}$/i.test(window.location.pathname) && (initial || changed)) {
         window.history.replaceState({}, '', `/${window.location.hash}`); setPath('/');
       }
     } catch (failure) {
@@ -86,7 +90,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    const pageName = user ? (path === '/profile' ? 'Your profile' : 'Everyday moments') : (path === '/signup' ? 'Create account' : 'Log in');
+    const pageName = user ? (path === '/profile' ? 'Your profile' : path.startsWith('/p/') ? 'A Gather moment' : 'Everyday moments') : (path === '/signup' ? 'Create account' : 'Log in');
     document.title = `${pageName} — Gather`;
   }, [path, user]);
 
@@ -98,7 +102,7 @@ export default function App() {
       if (!userRef.current) return;
       invalidateRefresh();
       updateAccount(null); setLoading(false); setNotice('Your session has ended. Please log in again.'); setAccountError('');
-      returnToRef.current = window.location.pathname === '/profile' ? '/profile' : '/';
+      returnToRef.current = window.location.pathname === '/profile' || /^\/p\/[0-9a-f]{24}$/i.test(window.location.pathname) ? window.location.pathname : '/';
       window.history.replaceState({}, '', `/login${window.location.hash}`); setPath('/login');
     }
     function accountChanged() { void reconcileAccount({ initial: loadingRef.current, announced: true }); }
@@ -131,6 +135,8 @@ export default function App() {
     return invalidateRefresh;
   }, [restoreAttempt]);
 
+  useEffect(() => { setComposerAccountId(null); }, [user?.id]);
+
   function authenticated(account) {
     invalidateRefresh();
     updateAccount(account); setLoading(false); setNotice(''); setAccountError('');
@@ -143,6 +149,7 @@ export default function App() {
     if (userRef.current?.id === account.id) {
       profileVersionRef.current += 1;
       updateAccount(account);
+      setPostRevision((value) => value + 1);
     }
   }
 
@@ -178,9 +185,16 @@ export default function App() {
     <button type="button" className="button button-primary" onClick={logout} disabled={loggingOut}>{loggingOut ? 'Logging out…' : 'Log out'}</button>
   </main>;
 
+  const postMatch = /^\/p\/([0-9a-f]{24})$/i.exec(path);
+  const openPost = (id) => navigate(`/p/${id}`, { keepHash: false });
+  const createPost = () => setComposerAccountId(user.id);
+  const postsChanged = () => setPostRevision((value) => value + 1);
+
   return <>
     {accountError && <div className="account-feedback" role="alert"><span>{accountError}</span><button className="icon-button" type="button" aria-label="Dismiss account message" onClick={() => setAccountError('')}><Icon name="close" size={17} /></button></div>}
-    <div hidden={path === '/profile'}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile')} onLogout={logout} loggingOut={loggingOut} /></div>
-    {path === '/profile' && <ProfilePage key={user.id} user={user} onSaved={profileSaved} onBack={() => navigate('/')} onLogout={logout} loggingOut={loggingOut} />}
+    <div hidden={path === '/profile' || Boolean(postMatch)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} postRevision={postRevision} onPostChanged={postsChanged} /></div>
+    {path === '/profile' && <ProfilePage key={user.id} user={user} onSaved={profileSaved} onBack={() => navigate('/')} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} postRevision={postRevision} onPostChanged={postsChanged} />}
+    {postMatch && <PostDetail key={`${user.id}:${postMatch[1]}`} postId={postMatch[1]} user={user} onBack={() => navigate('/', { keepHash: false })} onChanged={postsChanged} />}
+    {composerAccountId === user.id && <PostComposer key={user.id} user={user} onClose={() => { setComposerAccountId(null); postsChanged(); }} onPublished={(post) => { setComposerAccountId(null); postsChanged(); openPost(post.id); }} />}
   </>;
 }

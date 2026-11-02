@@ -14,6 +14,7 @@ const shapes = {
   more: <><circle cx="5" cy="12" r=".8" fill="currentColor" /><circle cx="12" cy="12" r=".8" fill="currentColor" /><circle cx="19" cy="12" r=".8" fill="currentColor" /></>,
   'chevron-left': <path d="m15 5-7 7 7 7" />,
   'chevron-right': <path d="m9 5 7 7-7 7" />,
+  'chevron-down': <path d="m5 9 7 7 7-7" />,
   'arrow-left': <path d="M20 12H4m6-6-6 6 6 6" />,
   'arrow-up': <path d="M12 20V4m-6 6 6-6 6 6" />,
   close: <path d="m6 6 12 12M6 18 18 6" />,

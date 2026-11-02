@@ -4,8 +4,9 @@ import Icon from '../../components/Icon.jsx';
 import { apiRequest } from '../../services/api.js';
 import { characterCount, describeError, serverFieldErrors, validateProfile } from './form-utils.js';
 import './auth.css';
+import PostFeed from '../posts/PostFeed.jsx';
 
-export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOut }) {
+export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOut, onCreate, onOpenPost, postRevision, onPostChanged }) {
   const [values, setValues] = useState({ displayName: user.displayName, username: user.username, bio: user.bio ?? '' });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState('');
@@ -75,6 +76,7 @@ export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOu
         </form>
       </section>
       <div className="profile-signout"><div><strong>Done for now?</strong><p>You can come back to your everyday space anytime.</p></div><button className="button button-secondary" type="button" onClick={onLogout} disabled={loggingOut || pending}>{loggingOut ? 'Logging out…' : 'Log out'}<Icon name="logout" size={17} /></button></div>
+      <section className="profile-posts-section" aria-labelledby="profile-posts-heading"><div className="profile-posts-heading"><div><span className="auth-eyebrow">Your everyday moments</span><h2 id="profile-posts-heading">Your posts</h2></div><button type="button" className="button button-primary" onClick={onCreate}><Icon name="plus" size={16} />Create post</button></div><PostFeed user={user} scope="own" revision={postRevision} onChanged={onPostChanged} onOpenPost={onOpenPost} onCreate={onCreate} /></section>
     </main>
   </div>;
 }

@@ -1,6 +1,6 @@
 # Gather
 
-A JavaScript MERN application for photo-first social networking. React and Vite provide the UI; Express runs one modular backend; Mongoose connects to MongoDB. Signup, login, session restoration, basic own-profile editing and logout now use the real backend. The homepage feed remains a clearly labelled design preview.
+A JavaScript MERN application for photo-first social networking. React and Vite provide the UI; Express runs one modular backend; Mongoose connects to MongoDB. Accounts, photo uploads, post publishing, Recent/own feeds and post management use the real backend. Photo bytes live in the existing MongoDB Atlas cluster.
 
 ## Account flow
 
@@ -26,6 +26,31 @@ The implemented routes under `/api/v1` are:
 | `GET /me` | Current account identity |
 | `PATCH /me/profile` | Updated own profile |
 | `POST /auth/logout` | Idempotent `204`; clears the presented session |
+
+## Photo posts
+
+Create a post from Home or your profile, choose 1–10 JPEG, PNG or WebP photos, reorder them, add optional photo descriptions, a caption and hashtags, then publish. Each image is uploaded separately before the post is published atomically. Published photos appear in Recent and Your posts, survive refresh, and have a shareable `/p/:id` page that requires login. Owners can edit captions/hashtags and delete posts. A version check prevents an old editor from overwriting a newer save; stable request keys make upload/publish retries safe.
+
+- Uploads and processed images are each capped at 5 MiB. Decoding is capped at 20 million pixels and 8,192 pixels per side. Animated files and unsupported or mismatched formats are rejected. Processing applies orientation, fits images within 2,048 × 2,048, strips source metadata and encodes WebP.
+- Binary BSON data is stored in `media_images`; ownership, dimensions and lifecycle metadata live in `media_assets`. Post/feed queries never load photo bytes. No Base64 photos or external image-storage account is required.
+- Each member may have 20 unattached uploads, 100 stored images and 50 MiB of processed photo bytes. Two uploads can be read/processed concurrently per backend process. Unattached uploads expire after 24 hours; paired metadata/byte cleanup runs at startup, every minute in bounded batches and on that member's next upload. Cancelled known uploads are removed immediately; interrupted uploads with an unknown result expire through cleanup.
+- Authenticated image delivery checks the current author status and visibility and sends private, non-cacheable responses. Recent contains active public authors; own posts remain accessible to their owner. Deleting a post removes its photo bytes and metadata in the same transaction while retaining the publish-key tombstone.
+
+All post/photo mutations require the session, CSRF protections and captured `X-Account-Id`. Upload and publication also require a UUID `Idempotency-Key`.
+
+| Method and path under `/api/v1` | Result |
+| --- | --- |
+| `POST /media/uploads` | Raw JPEG/PNG/WebP body; returns uploaded asset metadata |
+| `DELETE /media/:id` | Removes an owned unattached upload |
+| `GET /media/:id/content` | Authorized image bytes |
+| `POST /posts` | Publishes owned uploads; `201`, or `200` for a replay |
+| `GET /posts/recent` | Cursor-paginated public Recent feed |
+| `GET /me/posts` | Cursor-paginated own posts |
+| `GET /posts/:id` | One visible post |
+| `PATCH /posts/:id` | Owner edit with `expectedVersion` |
+| `DELETE /posts/:id` | Removes an owned post and its photos |
+
+Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed. Follow-based feeds, likes, comments and saved-post persistence remain future work.
 
 ## Local setup
 
@@ -62,7 +87,7 @@ Run the explicit database migration before starting the backend:
 npm.cmd run db:migrate
 ```
 
-Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. It records its completion in `schema_migrations` and is safe to rerun. It does not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend refuses to start before the migration is recorded. Automatic Mongoose collection/index creation remains disabled.
+Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post and media validators, owner/request-key uniqueness, feed indexes and the orphan lookup index. Both record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires both migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
 
 Start these commands in separate terminals:
 
@@ -94,7 +119,7 @@ npm.cmd test
 npm.cmd run build
 ```
 
-Tests cover safe HTTP errors, compressed JSON, configuration, normalized Unicode names, signup validation, password hashing, concurrent-tab CSRF/origin checks, account-bound writes, cookie attributes and session/profile behavior. `npm.cmd test` skips live database checks unless `TEST_MONGODB_URI` is present in the test process.
+Tests cover safe HTTP errors, compressed JSON, configuration, normalized Unicode names, signup validation, password hashing, concurrent-tab CSRF/origin checks, account-bound writes, session/profile behavior, image decoding/limits and authenticated photo/post routes. `npm.cmd test` skips live database checks unless `TEST_MONGODB_URI` is present in the test process.
 
 To exercise real MongoDB transactions and session behavior using local backend configuration:
 
@@ -102,7 +127,7 @@ To exercise real MongoDB transactions and session behavior using local backend c
 npm.cmd run test:integration
 ```
 
-This runner loads `backend/.env` and uses `TEST_MONGODB_URI` when already set, otherwise `MONGODB_URI`. The connection user must be allowed to create and drop a randomly named `gather_auth_test_<random>` database. Auth tests migrate that isolated database, exercise writes and clean up only that database. They do not write to the application database named in the URI. The separate database readiness test only connects, pings and closes. A failed cleanup can leave the isolated test database for manual inspection.
+This runner loads `backend/.env` and uses `TEST_MONGODB_URI` when already set, otherwise `MONGODB_URI`. The connection user must be allowed to create and drop randomly named `gather_auth_test_<random>` and `gather_posts_test_<random>` databases. Tests migrate those isolated databases, exercise account transactions, binary storage, publication races/retries, ownership, privacy, quotas, pagination, editing and cleanup, then drop only their own databases. They do not write to the application database named in the URI. The separate readiness test only connects, pings and closes. A failed cleanup can leave an isolated test database for manual inspection.
 
 | Endpoint | Result |
 | --- | --- |
@@ -111,7 +136,7 @@ This runner loads `backend/.env` and uses `TEST_MONGODB_URI` when already set, o
 
 Startup waits for MongoDB and checks migration readiness before exposing HTTP. Later database unavailability leaves liveness independent and makes readiness return `503`.
 
-JSON bodies are limited to exactly 32 KiB. API successes use `{data,meta:{requestId}}`; errors use `{error:{code,message,fields?},meta:{requestId}}`. Every response receives a generated `X-Request-Id`. Caller-supplied IDs are ignored, and raw database errors, password hashes and session tokens are never returned. Health and empty `204` responses are documented exceptions.
+JSON bodies are limited to exactly 32 KiB. The dedicated raw image upload route has its separate 5 MiB limit. API successes use `{data,meta:{requestId}}`; lists also include `nextCursor` and `hasMore` in `meta`. Errors use `{error:{code,message,fields?},meta:{requestId}}`. Every response receives a generated `X-Request-Id`. Caller-supplied IDs are ignored, and raw database errors, password hashes and session tokens are never returned. Image bytes, health and empty `204` responses are documented exceptions.
 
 The production frontend is written to `frontend/dist`. `npm.cmd run preview` serves that build but does not provide a production `/api` reverse proxy; use the same-origin hosting arrangement when testing the complete account flow.
 
@@ -119,17 +144,21 @@ The production frontend is written to `frontend/dist`. `npm.cmd run preview` ser
 
 The Gather UI uses forest green and sage, an off-white canvas, Inter typography and responsive photo cards. Desktop has three columns, tablet a compact navigation rail and mobile top/bottom navigation. Shared visual tokens live in `frontend/src/styles/global.css`.
 
-The account identity and editable profile are real. The visible **Feed preview** label identifies fictional people, posts and counts. Following/Recent tabs, search, carousels, likes, saves, comments and suggested follows remain browser demonstrations; they reset on refresh. Post publishing and other future destinations display coming-next dialogs. No feed or engagement persistence is implied by the account integration.
+The homepage uses real Recent and Your posts feeds, image carousels, owner post actions and empty/loading/error states. Search filters only posts already loaded in the browser and is labelled accordingly. Profile shows the member's own published posts below its editor. Notifications, Saved and other future destinations still show informational dialogs.
 
-Preview media uses public `lh3.googleusercontent.com` URLs from the supplied design exports, and Inter loads from Google Fonts. Fallbacks keep the layout usable if those assets cannot load. Future product photos will use authorized private media delivery.
+Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoDB media route. The old design-preview feed components remain isolated in `features/feed/` and are no longer rendered by Home.
 
 - `frontend/src/App.jsx`: session restoration and account/navigation state.
 - `frontend/src/features/auth/`: signup, login and own-profile forms.
+- `frontend/src/features/posts/`: composer, feeds, real post cards, detail view and post API helpers.
 - `frontend/src/pages/HomePage.jsx`: homepage with the signed-in account.
 - `frontend/src/features/feed/`: reusable post cards and isolated preview data.
 - `frontend/src/services/api.js`: credentialed requests, CSRF and safe API errors.
 - `backend/src/modules/auth/`: routes, services, repositories, models, validation and password helpers.
+- `backend/src/modules/posts/`: publication, access rules, pagination, editing and cleanup.
+- `backend/src/modules/media/process-image.js`: bounded decoding and WebP processing.
 - `backend/src/migrations/001-auth.js`: explicit auth database schema/index migration.
+- `backend/src/migrations/002-posts.js`: explicit posts/media schema and index migration.
 - `backend/src/middleware/`: transport, request IDs, CSRF/rate limits and safe errors.
 - `backend/src/config/`: environment validation and reusable MongoDB connection.
 - `backend/test/`: isolated HTTP/unit tests and optional real-database integration tests.
@@ -143,8 +172,10 @@ Original documents in `docs/` remain read-only:
 - `Social_Media_MongoDB_Design.docx`: collection and lifecycle design.
 - `Social_Media_API_Design.docs`: API contracts; this file currently contains a ZIP-based Word document despite its `.docs` extension.
 
-The database/API documents govern V1 technical scope where older proposals differ. The explicit product-owner decision to skip email verification overrides their pending-account/verification flow for this implementation; the source documents themselves have not been changed. This slice combines their Origin/custom-header requirements with signed session-bound CSRF tokens.
+The database/API documents govern V1 technical scope where older proposals differ. Explicit product-owner decisions override their email-verification and external-object-storage proposals: signup skips verification, and uploaded product photos will be stored in MongoDB Atlas. The source documents themselves have not been changed. This slice combines their Origin/custom-header requirements with signed session-bound CSRF tokens.
 
-Implemented: real account creation, login, seven-day sessions, basic own-profile editing, logout, auth schema/index migration, transport security, health checks and the responsive homepage preview.
+Implemented: real account creation, login, seven-day sessions, own-profile editing, logout, transport security, health checks, MongoDB photo uploads, post publication, Recent/own feeds, profile posts, permalinks, caption/hashtag edits, post deletion and schema/index migrations.
 
-Next milestone: **photo upload and post creation**, followed by connecting published posts to the real feed. It needs a private media-storage choice, upload validation, ownership checks and authorized delivery. Password recovery must also be completed before inviting external testers. Public/private profile access, follows, persisted engagement and saved items, search, notifications, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.
+Product-owner media decisions for this slice are implemented above: MongoDB binary storage and 5 MiB limits replace the original external-storage proposal. Image bytes count toward Atlas storage usage. Next product milestone: profiles and follow relationships that can power a Following feed.
+
+Password recovery must also be completed before inviting external testers. Public/private profile access, follows, persisted engagement and saved items, search, notifications, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.

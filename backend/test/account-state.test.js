@@ -19,6 +19,7 @@ function accountState(user) {
   const userRef = { current: user };
   const updates = [];
   const notices = [];
+  const posts = { revision: 0 };
   const context = {
     AbortController,
     userRef,
@@ -32,13 +33,14 @@ function accountState(user) {
     setRestoreError() {},
     setAccountError: (message) => notices.push(message),
     setPath() {},
+    setPostRevision: (update) => { posts.revision = update(posts.revision); },
     describeError: (error) => error.message,
     window: { location: { pathname: '/profile', hash: '' }, history: { replaceState() {} } },
   };
   const actions = runInNewContext(
     `${accountFunctions}\n${profileSavedFunction}\n({ reconcileAccount, profileSaved });`, context,
   );
-  return { ...actions, userRef, updates, notices, completeRead };
+  return { ...actions, userRef, updates, notices, completeRead, posts };
 }
 
 test('an older same-account refresh cannot overwrite a completed profile save', async () => {
@@ -53,6 +55,14 @@ test('an older same-account refresh cannot overwrite a completed profile save', 
 
   assert.deepEqual(state.userRef.current, saved);
   assert.deepEqual(state.updates, [saved]);
+  assert.equal(state.posts.revision, 1, 'a profile save refreshes post author names and loaded search');
+});
+
+test('a profile save from an old account cannot refresh the new account feed', () => {
+  const state = accountState({ id: 'bob', displayName: 'Bob' });
+  state.profileSaved({ id: 'alice', displayName: 'Alice saved' });
+  assert.equal(state.posts.revision, 0);
+  assert.deepEqual(state.updates, []);
 });
 
 test('a pending refresh still applies a different account after a profile save', async () => {
