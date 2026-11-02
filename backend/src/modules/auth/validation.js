@@ -79,13 +79,22 @@ export function validateLogin(input) {
 }
 
 export function validateProfile(input) {
-  checkObject(input, ['username', 'displayName', 'bio']);
+  checkObject(input, ['username', 'displayName', 'bio', 'visibility', 'avatarAssetId']);
   if (!Object.keys(input).length) invalid([{ path: 'body', code: 'EMPTY_UPDATE' }]);
   const errors = [];
   const value = {};
   if (Object.hasOwn(input, 'username')) value.usernameNormalized = usernameField(input, errors);
   if (Object.hasOwn(input, 'displayName')) value.displayName = displayNameField(input, errors);
   if (Object.hasOwn(input, 'bio')) value.bio = text(input, 'bio', errors, { max: 160 });
+  if (Object.hasOwn(input, 'visibility')) {
+    if (!['public', 'private'].includes(input.visibility)) errors.push({ path: 'visibility', code: 'INVALID_FORMAT' });
+    else value.visibility = input.visibility;
+  }
+  if (Object.hasOwn(input, 'avatarAssetId')) {
+    if (input.avatarAssetId !== null && (typeof input.avatarAssetId !== 'string' || !/^[a-f0-9]{24}$/i.test(input.avatarAssetId))) {
+      errors.push({ path: 'avatarAssetId', code: 'INVALID_FORMAT' });
+    } else value.avatarAssetId = input.avatarAssetId === null ? null : input.avatarAssetId.toLowerCase();
+  }
   if (errors.length) invalid(errors);
   return value;
 }

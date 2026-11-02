@@ -7,6 +7,11 @@ export const MAX_READY_UPLOADS = 20;
 export const MAX_MEMBER_IMAGES = 100;
 export const MAX_MEMBER_BYTES = 50 * 1024 * 1024;
 
+export function mediaPurpose(value = 'post') {
+  if (!['post', 'avatar'].includes(value)) invalid('purpose');
+  return value;
+}
+
 function invalid(path, code = 'INVALID_FORMAT') {
   const error = new HttpError(422, 'VALIDATION_ERROR', 'Check the highlighted post fields.');
   error.fields = [{ path, code }];
@@ -101,5 +106,5 @@ export function validateProcessedImage(input) {
     || input.width < 1 || input.height < 1 || input.width > 2048 || input.height > 2048) {
     throw new HttpError(422, 'INVALID_IMAGE', 'Choose a supported photo within the image limits.');
   }
-  return { ...input, uploadKey: requestKey(input.uploadKey, 'X-Upload-Key') };
+  return { ...input, purpose: mediaPurpose(input.purpose), uploadKey: requestKey(input.uploadKey, 'X-Upload-Key') };
 }

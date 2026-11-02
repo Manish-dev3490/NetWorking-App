@@ -1,6 +1,6 @@
 # Gather
 
-A JavaScript MERN application for photo-first social networking. React and Vite provide the UI; Express runs one modular backend; Mongoose connects to MongoDB. Accounts, photo uploads, post publishing, Recent/own feeds and post management use the real backend. Photo bytes live in the existing MongoDB Atlas cluster.
+A JavaScript MERN application for photo-first social networking. React and Vite provide the UI; Express runs one modular backend; Mongoose connects to MongoDB. Accounts, member profiles/search, follows, private requests, photo uploads and chronological feeds use the real backend. Photo bytes live in the existing MongoDB Atlas cluster.
 
 ## Account flow
 
@@ -12,7 +12,7 @@ Email verification is intentionally omitted at the product owner's request. Regi
 - Passwords use salted scrypt hashes. Password work is bounded to two concurrent operations; an overloaded backend returns a safe `503`.
 - Sessions are opaque random tokens. Only token hashes are stored in MongoDB. The browser receives a `__Host-session` cookie with `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/` and no `Domain`. Session tokens never enter localStorage.
 - Sessions expire absolutely after seven days. Each authenticated request rechecks expiry, revocation, the user's `authVersion` and account state. TTL indexes only clean up expired records.
-- Signup creates the user, session and default Saved collection in one transaction. Basic profile editing updates only the authenticated member's display name, username and bio. Logout revokes the presented session and clears its cookie.
+- Signup creates the user, session and default Saved collection in one transaction. Profile editing updates only the authenticated member's display name, username, bio, visibility and profile photo. Logout revokes the presented session and clears its cookie.
 - Profile saves include `X-Account-Id`, captured from the account that opened the form. The backend compares it with the session owner before writing; a missing or changed account returns `409 ACCOUNT_CHANGED`. Logout also checks this precondition when supplied, so an old tab cannot sign another account out.
 - Tabs revalidate the shared session after authentication changes and on focus. A different account gets a fresh profile form; same-account drafts stay intact. Delayed refreshes cannot overwrite a profile save that has already succeeded.
 
@@ -33,8 +33,8 @@ Create a post from Home or your profile, choose 1–10 JPEG, PNG or WebP photos,
 
 - Uploads and processed images are each capped at 5 MiB. Decoding is capped at 20 million pixels and 8,192 pixels per side. Animated files and unsupported or mismatched formats are rejected. Processing applies orientation, fits images within 2,048 × 2,048, strips source metadata and encodes WebP.
 - Binary BSON data is stored in `media_images`; ownership, dimensions and lifecycle metadata live in `media_assets`. Post/feed queries never load photo bytes. No Base64 photos or external image-storage account is required.
-- Each member may have 20 unattached uploads, 100 stored images and 50 MiB of processed photo bytes. Two uploads can be read/processed concurrently per backend process. Unattached uploads expire after 24 hours; paired metadata/byte cleanup runs at startup, every minute in bounded batches and on that member's next upload. Cancelled known uploads are removed immediately; interrupted uploads with an unknown result expire through cleanup.
-- Authenticated image delivery checks the current author status and visibility and sends private, non-cacheable responses. Recent contains active public authors; own posts remain accessible to their owner. Deleting a post removes its photo bytes and metadata in the same transaction while retaining the publish-key tombstone.
+- Each member may have 20 unattached uploads, 100 stored images and 50 MiB of processed photo bytes, shared across posts and profile photos. Two uploads can be read/processed concurrently per backend process. Unattached uploads expire after 24 hours; paired metadata/byte cleanup runs at startup, every minute in bounded batches and on that member's next upload. Cancelled known uploads are removed immediately; interrupted uploads with an unknown result expire through cleanup.
+- Authenticated image delivery checks the current author status, visibility and accepted-follow relationship and sends private, non-cacheable responses. Recent contains active public authors; private posts are accessible to their owner and accepted followers. Deleting a post removes its photo bytes and metadata in the same transaction while retaining the publish-key tombstone.
 
 All post/photo mutations require the session, CSRF protections and captured `X-Account-Id`. Upload and publication also require a UUID `Idempotency-Key`.
 
@@ -50,7 +50,35 @@ All post/photo mutations require the session, CSRF protections and captured `X-A
 | `PATCH /posts/:id` | Owner edit with `expectedVersion` |
 | `DELETE /posts/:id` | Removes an owned post and its photos |
 
-Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed. Follow-based feeds, likes, comments and saved-post persistence remain future work.
+Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed. Likes, comments and saved-post persistence remain future work.
+
+## Members and follows
+
+Open a post author's profile or search for a member by username or display name. Member profiles show their photo and relationship state. Public profiles, own profiles and accepted private followers can access the biography, post count, follower/following counts and posts. Other viewers see only minimal identity and a private-account gate; private counts and biography are omitted from the API response.
+
+- Following a public member is accepted immediately; following a private member creates a pending request. The owner can approve or reject incoming requests. Members can cancel requests, unfollow, inspect eligible follower/following lists and remove their own accepted followers.
+- Follow pairs are unique and self-follow is rejected. Repeated follow/approve operations replay current state; rejection removes pending requests only and never revokes an already accepted relationship. Rejecting an already approved request returns `409 REQUEST_ALREADY_APPROVED`; the inbox refreshes and explains that follower removal is needed to revoke private-content access. Repeated rejection of an absent request remains `204`. Follow, follower removal and privacy changes use MongoDB transactions and shared user guards, so concurrent changes recheck current policy.
+- Changing public to private preserves accepted followers. Changing private to public keeps pending requests pending until approved or cancelled. Revoking a private follow removes access on subsequent profile/post/image requests, including existing links and feed cursors. Bytes already downloaded cannot be recalled.
+- Following contains the signed-in member and current accepted follows, newest first. Recent remains public. Member search uses escaped, indexed normalized prefixes, with a 2–60-character query and a username/display-name selector. Lists use signed 24-hour cursors bound to the viewer, route, target and search filter.
+- Profile photos use the same bounded MongoDB binary upload pipeline with `X-Media-Purpose: avatar`; normal post uploads default to `post`. Avatar and post assets cannot be claimed for the other purpose. Profile saves atomically attach an owned ready avatar and delete the replaced photo's bytes/metadata. Profile photos are minimal identity, so active signed-in members can see them even when the profile's posts are private.
+
+All relationship mutations require the existing session, CSRF protections and captured `X-Account-Id`, and accept no body fields.
+
+| Method and path under `/api/v1` | Result |
+| --- | --- |
+| `GET /users/:id` | Member profile with relationship and content-access state |
+| `GET /users/:id/posts` | Authorized member posts |
+| `GET /users/:id/followers` / `following` | Authorized accepted-relationship lists |
+| `GET /search/users?q=…&match=username` | Member prefix search; `match=displayName` also supported |
+| `PUT /me/following/:id` | Follow or request; returns pending/accepted |
+| `DELETE /me/following/:id` | Cancel request or unfollow |
+| `GET /me/follow-requests` | Own incoming pending requests |
+| `PUT /me/follow-requests/:requesterId` | Approve request |
+| `DELETE /me/follow-requests/:requesterId` | Reject pending request |
+| `DELETE /me/followers/:id` | Remove accepted follower |
+| `GET /posts/following` | Chronological Following feed |
+
+Following-feed author IDs are resolved from current accepted follows, then queried through the posts' author/time index. This V1 query materializes the eligible author IDs for one request; it is not a claim of fixed memory usage at arbitrary follow counts.
 
 ## Local setup
 
@@ -87,7 +115,7 @@ Run the explicit database migration before starting the backend:
 npm.cmd run db:migrate
 ```
 
-Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post and media validators, owner/request-key uniqueness, feed indexes and the orphan lookup index. Both record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires both migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
+Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all three migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
 
 Start these commands in separate terminals:
 
@@ -127,7 +155,7 @@ To exercise real MongoDB transactions and session behavior using local backend c
 npm.cmd run test:integration
 ```
 
-This runner loads `backend/.env` and uses `TEST_MONGODB_URI` when already set, otherwise `MONGODB_URI`. The connection user must be allowed to create and drop randomly named `gather_auth_test_<random>` and `gather_posts_test_<random>` databases. Tests migrate those isolated databases, exercise account transactions, binary storage, publication races/retries, ownership, privacy, quotas, pagination, editing and cleanup, then drop only their own databases. They do not write to the application database named in the URI. The separate readiness test only connects, pings and closes. A failed cleanup can leave an isolated test database for manual inspection.
+This runner loads `backend/.env` and uses `TEST_MONGODB_URI` when already set, otherwise `MONGODB_URI`. The connection user must be allowed to create and drop randomly named `gather_auth_test_<random>`, `gather_posts_test_<random>` and `gather_network_test_<random>` databases. Tests migrate those isolated databases, exercise account transactions, binary storage, publication races/retries, ownership, privacy, quotas, pagination, requests, search, Following feeds, profile photos and cleanup, then drop only their own databases. They do not write to the application database named in the URI. The separate readiness test only connects, pings and closes. A failed cleanup can leave an isolated test database for manual inspection.
 
 | Endpoint | Result |
 | --- | --- |
@@ -144,21 +172,24 @@ The production frontend is written to `frontend/dist`. `npm.cmd run preview` ser
 
 The Gather UI uses forest green and sage, an off-white canvas, Inter typography and responsive photo cards. Desktop has three columns, tablet a compact navigation rail and mobile top/bottom navigation. Shared visual tokens live in `frontend/src/styles/global.css`.
 
-The homepage uses real Recent and Your posts feeds, image carousels, owner post actions and empty/loading/error states. Search filters only posts already loaded in the browser and is labelled accordingly. Profile shows the member's own published posts below its editor. Notifications, Saved and other future destinations still show informational dialogs.
+The homepage uses real Recent, Following and Your posts feeds, image carousels, author profile links, owner post actions and empty/loading/error states. Member search queries the backend; the separate loaded-post filter is labelled accordingly. Own-profile editing includes visibility and profile photos. Member pages show authorized posts and relationship lists, and the Requests page supports approval/rejection. Notifications, Saved and other future destinations still show informational dialogs.
 
 Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoDB media route. The old design-preview feed components remain isolated in `features/feed/` and are no longer rendered by Home.
 
 - `frontend/src/App.jsx`: session restoration and account/navigation state.
 - `frontend/src/features/auth/`: signup, login and own-profile forms.
 - `frontend/src/features/posts/`: composer, feeds, real post cards, detail view and post API helpers.
+- `frontend/src/features/network/`: member search, profiles, relationship lists and follow requests.
 - `frontend/src/pages/HomePage.jsx`: homepage with the signed-in account.
 - `frontend/src/features/feed/`: reusable post cards and isolated preview data.
 - `frontend/src/services/api.js`: credentialed requests, CSRF and safe API errors.
 - `backend/src/modules/auth/`: routes, services, repositories, models, validation and password helpers.
 - `backend/src/modules/posts/`: publication, access rules, pagination, editing and cleanup.
+- `backend/src/modules/network/`: member discovery, profile access and transactional relationships.
 - `backend/src/modules/media/process-image.js`: bounded decoding and WebP processing.
 - `backend/src/migrations/001-auth.js`: explicit auth database schema/index migration.
 - `backend/src/migrations/002-posts.js`: explicit posts/media schema and index migration.
+- `backend/src/migrations/003-network.js`: relationship/search indexes and profile-photo/policy schema.
 - `backend/src/middleware/`: transport, request IDs, CSRF/rate limits and safe errors.
 - `backend/src/config/`: environment validation and reusable MongoDB connection.
 - `backend/test/`: isolated HTTP/unit tests and optional real-database integration tests.
@@ -174,8 +205,8 @@ Original documents in `docs/` remain read-only:
 
 The database/API documents govern V1 technical scope where older proposals differ. Explicit product-owner decisions override their email-verification and external-object-storage proposals: signup skips verification, and uploaded product photos will be stored in MongoDB Atlas. The source documents themselves have not been changed. This slice combines their Origin/custom-header requirements with signed session-bound CSRF tokens.
 
-Implemented: real account creation, login, seven-day sessions, own-profile editing, logout, transport security, health checks, MongoDB photo uploads, post publication, Recent/own feeds, profile posts, permalinks, caption/hashtag edits, post deletion and schema/index migrations.
+Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, transport security, health checks and schema/index migrations.
 
-Product-owner media decisions for this slice are implemented above: MongoDB binary storage and 5 MiB limits replace the original external-storage proposal. Image bytes count toward Atlas storage usage. Next product milestone: profiles and follow relationships that can power a Following feed.
+Product-owner media decisions are implemented above: MongoDB binary storage and 5 MiB limits replace the original external-storage proposal. Image bytes count toward Atlas storage usage. Profiles, follows and the Following feed now form the application's core networking flow.
 
-Password recovery must also be completed before inviting external testers. Public/private profile access, follows, persisted engagement and saved items, search, notifications, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.
+Password recovery must also be completed before inviting external testers. Persisted engagement and saved items, hashtag search, notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.

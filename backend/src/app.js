@@ -7,8 +7,9 @@ import { apiRoutes } from './routes.js';
 import { createAuthRouter } from './modules/auth/routes.js';
 import { createAuthSecurity } from './middleware/auth-security.js';
 import { createPostRouter } from './modules/posts/routes.js';
+import { createNetworkRouter } from './modules/network/routes.js';
 
-export function createApp({ database, authService, postService, config }) {
+export function createApp({ database, authService, postService, networkService, config }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(requestId);
@@ -40,6 +41,7 @@ export function createApp({ database, authService, postService, config }) {
   if (authService) {
     app.use('/api/v1', createAuthSecurity({ config }), createAuthRouter({ authService }));
     if (postService) app.use('/api/v1', createPostRouter({ authService, postService }));
+    if (networkService) app.use('/api/v1', createNetworkRouter({ authService, networkService }));
   }
   app.use('/api/v1', apiRoutes);
   app.use(notFound);

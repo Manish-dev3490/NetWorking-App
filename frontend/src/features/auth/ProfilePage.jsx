@@ -5,24 +5,32 @@ import { apiRequest } from '../../services/api.js';
 import { characterCount, describeError, serverFieldErrors, validateProfile } from './form-utils.js';
 import './auth.css';
 import PostFeed from '../posts/PostFeed.jsx';
+import AvatarEditor from '../network/AvatarEditor.jsx';
+import '../network/network.css';
 
-export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOut, onCreate, onOpenPost, postRevision, onPostChanged }) {
-  const [values, setValues] = useState({ displayName: user.displayName, username: user.username, bio: user.bio ?? '' });
+export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOut, onCreate, onOpenPost, onOpenProfile, onRequests, postRevision, onPostChanged }) {
+  const [values, setValues] = useState({ displayName: user.displayName, username: user.username, bio: user.bio ?? '', visibility: user.visibility });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
+  const [avatarPending, setAvatarPending] = useState(false);
   const headingRef = useRef(null);
   const errorRef = useRef(null);
   const requestRef = useRef(null);
+  const visibilityEditedRef = useRef(false);
   const bioLength = characterCount(values.bio.trim().normalize('NFC'));
   useEffect(() => {
     headingRef.current?.focus();
     return () => requestRef.current?.abort();
   }, []);
+  useEffect(() => {
+    if (!visibilityEditedRef.current) setValues((previous) => ({ ...previous, visibility: user.visibility }));
+  }, [user.visibility]);
 
   function update(event) {
     const { name, value } = event.target;
+    if (name === 'visibility') visibilityEditedRef.current = true;
     setValues((previous) => ({ ...previous, [name]: value }));
     setErrors((previous) => ({ ...previous, [name]: undefined }));
     setError(''); setSaved(false);
@@ -30,7 +38,7 @@ export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOu
 
   async function submit(event) {
     event.preventDefault();
-    if (pending) return;
+    if (pending || avatarPending) return;
     const fieldErrors = validateProfile(values);
     setErrors(fieldErrors); setError(''); setSaved(false);
     if (Object.keys(fieldErrors).length) { event.currentTarget.elements[Object.keys(fieldErrors)[0]]?.focus(); return; }
@@ -40,10 +48,12 @@ export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOu
     try {
       const response = await apiRequest('me/profile', { method: 'PATCH', accountId: user.id, signal: controller.signal, body: {
         displayName: values.displayName.trim(), username: values.username.trim().toLowerCase(), bio: values.bio,
+        ...(visibilityEditedRef.current ? { visibility: values.visibility } : {}),
       } });
       if (controller.signal.aborted) return;
+      visibilityEditedRef.current = false;
       onSaved(response.data);
-      setValues({ displayName: response.data.displayName, username: response.data.username, bio: response.data.bio ?? '' });
+      setValues({ displayName: response.data.displayName, username: response.data.username, bio: response.data.bio ?? '', visibility: response.data.visibility });
       setSaved(true);
     } catch (failure) {
       if (controller.signal.aborted) return;
@@ -57,13 +67,14 @@ export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOu
       <button type="button" className="button button-secondary" onClick={onBack}><Icon name="arrow-left" size={16} />Back to feed</button>
     </header>
     <main className="profile-editor" aria-labelledby="profile-heading">
-      <div className="profile-editor-intro"><span className="auth-eyebrow">A space that feels like you</span><h1 id="profile-heading" ref={headingRef} tabIndex={-1}>Your profile</h1><p>Let the good company get to know you.</p></div>
+      <div className="profile-editor-intro"><span className="auth-eyebrow">A space that feels like you</span><h1 id="profile-heading" ref={headingRef} tabIndex={-1}>Your profile</h1><p>Let the good company get to know you.</p><div className="profile-community-actions"><button type="button" className="button button-secondary" onClick={() => onOpenProfile(user.id)}>View your profile & connections</button><button type="button" className="button button-secondary" onClick={onRequests}>Follow requests</button></div></div>
       <section className="profile-editor-card" aria-label="Edit your profile">
-        <div className="profile-identity"><Avatar name={user.displayName} size={68} /><div><strong>{user.displayName}</strong><span>@{user.username}</span></div></div>
+        <div className="profile-identity"><Avatar src={user.avatarUrl} name={user.displayName} size={68} /><div><strong>{user.displayName}</strong><span>@{user.username}</span></div></div>
+        <AvatarEditor user={user} onSaved={onSaved} disabled={pending || loggingOut} onBusyChange={setAvatarPending} />
         {error && <p className="form-error-summary" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
         {saved && <p className="form-success" role="status"><Icon name="check" size={18} />Your profile has been updated.</p>}
         <form className="account-form" onSubmit={submit} noValidate aria-busy={pending}>
-          <fieldset disabled={pending || loggingOut}><legend className="sr-only">Profile details</legend>
+          <fieldset disabled={pending || avatarPending || loggingOut}><legend className="sr-only">Profile details</legend>
             <div className="form-field"><label htmlFor="profile-name">Your name</label><input id="profile-name" name="displayName" autoComplete="name" value={values.displayName} onChange={update} maxLength={120} required aria-invalid={Boolean(errors.displayName)} aria-describedby={errors.displayName ? 'profile-name-error' : undefined} />
               {errors.displayName && <p id="profile-name-error" className="field-error">{errors.displayName}</p>}</div>
             <div className="form-field"><label htmlFor="profile-username">Username</label><div className="input-with-prefix"><span aria-hidden="true">@</span><input id="profile-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} value={values.username} onChange={update} maxLength={30} required aria-invalid={Boolean(errors.username)} aria-describedby={errors.username ? 'profile-username-error' : 'profile-username-hint'} /></div>
@@ -71,12 +82,13 @@ export default function ProfilePage({ user, onSaved, onBack, onLogout, loggingOu
             <div className="form-field"><label htmlFor="profile-bio">A little about you <span className="field-optional">Optional</span></label><textarea id="profile-bio" name="bio" rows={4} maxLength={320} value={values.bio} onChange={update} placeholder="What are you making, exploring or enjoying?" aria-invalid={Boolean(errors.bio)} aria-describedby={errors.bio ? 'profile-bio-error' : 'profile-bio-count'} />
               {errors.bio && <p id="profile-bio-error" className="field-error">{errors.bio}</p>}<p id="profile-bio-count" className={`field-hint bio-count ${bioLength > 160 ? 'field-error' : ''}`}>{bioLength} / 160 characters</p></div>
             <div className="profile-email"><span>Email address</span><strong>{user.email}</strong><p>This is the email you use to log in.</p></div>
-            <button type="submit" className="button button-primary account-submit" disabled={pending || loggingOut}>{pending ? 'Saving your profile…' : 'Save changes'}<Icon name="check" size={17} /></button>
+            <div className="form-field"><label htmlFor="profile-visibility">Account privacy</label><select className="profile-visibility-select" id="profile-visibility" name="visibility" value={values.visibility} onChange={update}><option value="public">Public</option><option value="private">Private</option></select><p className="field-hint">{values.visibility === 'private' ? 'Only approved followers can see your posts, bio and connections. Existing followers keep their access.' : 'Signed-in members can see your posts, bio and connections. Existing pending requests still need approval.'}</p></div>
+            <button type="submit" className="button button-primary account-submit" disabled={pending || avatarPending || loggingOut}>{pending ? 'Saving your profile…' : 'Save changes'}<Icon name="check" size={17} /></button>
           </fieldset>
         </form>
       </section>
-      <div className="profile-signout"><div><strong>Done for now?</strong><p>You can come back to your everyday space anytime.</p></div><button className="button button-secondary" type="button" onClick={onLogout} disabled={loggingOut || pending}>{loggingOut ? 'Logging out…' : 'Log out'}<Icon name="logout" size={17} /></button></div>
-      <section className="profile-posts-section" aria-labelledby="profile-posts-heading"><div className="profile-posts-heading"><div><span className="auth-eyebrow">Your everyday moments</span><h2 id="profile-posts-heading">Your posts</h2></div><button type="button" className="button button-primary" onClick={onCreate}><Icon name="plus" size={16} />Create post</button></div><PostFeed user={user} scope="own" revision={postRevision} onChanged={onPostChanged} onOpenPost={onOpenPost} onCreate={onCreate} /></section>
+      <div className="profile-signout"><div><strong>Done for now?</strong><p>You can come back to your everyday space anytime.</p></div><button className="button button-secondary" type="button" onClick={onLogout} disabled={loggingOut || pending || avatarPending}>{loggingOut ? 'Logging out…' : 'Log out'}<Icon name="logout" size={17} /></button></div>
+      <section className="profile-posts-section" aria-labelledby="profile-posts-heading"><div className="profile-posts-heading"><div><span className="auth-eyebrow">Your everyday moments</span><h2 id="profile-posts-heading">Your posts</h2></div><button type="button" className="button button-primary" onClick={onCreate}><Icon name="plus" size={16} />Create post</button></div><PostFeed user={user} scope="own" revision={postRevision} onChanged={onPostChanged} onOpenPost={onOpenPost} onOpenProfile={onOpenProfile} onCreate={onCreate} /></section>
     </main>
   </div>;
 }

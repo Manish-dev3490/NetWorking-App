@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import Avatar from '../../components/Avatar.jsx';
 import Icon from '../../components/Icon.jsx';
 import { apiRequest } from '../../services/api.js';
 import { describeError } from '../auth/form-utils.js';
 import { countCharacters, formatPostDate, normalizedTags, validatePostFields } from './post-utils.js';
+import { PostEditorContext } from './PostEditorContext.js';
 import './posts.css';
 
-function EditPost({ post, user, onClose, onChanged }) {
+export function EditPost({ post, user, onClose, onChanged }) {
   const [caption, setCaption] = useState(post.caption);
   const [tags, setTags] = useState(post.hashtags.join(' '));
   const [error, setError] = useState('');
@@ -42,7 +43,8 @@ function EditPost({ post, user, onClose, onChanged }) {
   </dialog>;
 }
 
-export default function RealPostCard({ post, user, onChanged, onOpenPost, detail = false }) {
+export default function RealPostCard({ post, user, onChanged, onOpenPost, onOpenProfile = () => {}, detail = false }) {
+  const openPostEditor = useContext(PostEditorContext);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [failed, setFailed] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -86,9 +88,9 @@ export default function RealPostCard({ post, user, onChanged, onOpenPost, detail
     }
   }
   return <article className="real-post-card" aria-label={`Post by ${post.author.displayName}`}>
-    <header className="real-post-header"><div className="real-post-author"><Avatar name={post.author.displayName} size={40} /><div><h2>{post.author.displayName}</h2><span>@{post.author.username} · <time dateTime={post.createdAt}>{formatPostDate(post.createdAt)}</time></span></div></div>
+    <header className="real-post-header"><div className="real-post-author"><button type="button" className="avatar-button" aria-label={`View ${post.author.displayName}'s profile`} onClick={() => onOpenProfile(post.author.id)}><Avatar src={post.author.avatarUrl} name={post.author.displayName} size={40} /></button><div><h2><button type="button" className="post-author-name" onClick={() => onOpenProfile(post.author.id)}>{post.author.displayName}</button></h2><span>@{post.author.username} · <time dateTime={post.createdAt}>{formatPostDate(post.createdAt)}</time></span></div></div>
       <div className="post-options" ref={optionsRef}><button type="button" className="icon-button" aria-label={`Options for ${post.author.displayName}'s post`} aria-expanded={optionsOpen} ref={optionsButtonRef} onClick={() => setOptionsOpen((open) => !open)}><Icon name="more" /></button>
-        {optionsOpen && <div className="post-options-panel" role="group" aria-label="Post options">{!detail && <button type="button" onClick={() => onOpenPost(post.id)}><Icon name="explore" size={16} />Open post</button>}<button type="button" onClick={share}><Icon name="share" size={16} />Copy link</button>{canManage && <><button type="button" onClick={() => { setEditing(true); setOptionsOpen(false); }}><Icon name="settings" size={16} />Edit caption</button><button type="button" onClick={() => { setConfirmDelete(true); setOptionsOpen(false); }}><Icon name="close" size={16} />Delete post</button></>}</div>}
+        {optionsOpen && <div className="post-options-panel" role="group" aria-label="Post options">{!detail && <button type="button" onClick={() => onOpenPost(post.id)}><Icon name="explore" size={16} />Open post</button>}<button type="button" onClick={share}><Icon name="share" size={16} />Copy link</button>{canManage && <><button type="button" onClick={() => { if (openPostEditor) openPostEditor(post); else setEditing(true); setOptionsOpen(false); }}><Icon name="settings" size={16} />Edit caption</button><button type="button" onClick={() => { setConfirmDelete(true); setOptionsOpen(false); }}><Icon name="close" size={16} />Delete post</button></>}</div>}
       </div>
     </header>
     <div className="real-post-image">{!failed && photo ? <img src={photo.contentUrl} alt={photo.altText || `Photo shared by ${post.author.displayName}`} loading="lazy" onError={() => setFailed(true)} /> : <div className="real-image-fallback"><Icon name="leaf" size={35} /><p>This photo is unavailable.</p><button type="button" className="text-button" onClick={() => setFailed(false)}>Try again</button></div>}

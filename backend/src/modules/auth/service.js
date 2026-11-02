@@ -15,6 +15,7 @@ function selfUser(user) {
   return {
     id: user._id.toString(), email: user.emailNormalized, username: user.usernameNormalized,
     displayName: user.displayName, bio: user.bio ?? '', visibility: user.visibility,
+    avatarUrl: user.avatarAssetId ? `/api/v1/media/${user.avatarAssetId.toString()}/content` : null,
     status: user.status, createdAt: user.createdAt.toISOString(),
   };
 }
@@ -62,7 +63,7 @@ export function createAuthService({ connection, now = () => new Date(), reposito
         _id: new mongoose.Types.ObjectId(), emailNormalized: data.email,
         usernameNormalized: data.username, passwordHash, displayName: data.displayName,
         displayNameSearch: displayNameSearch(data.displayName), bio: '', visibility: 'public',
-        status: 'active', authVersion: 0, createdAt: date, updatedAt: date,
+        status: 'active', authVersion: 0, policyVersion: 0, avatarAssetId: null, createdAt: date, updatedAt: date,
       };
       const session = sessionFor(user, date);
       try {
@@ -108,7 +109,7 @@ export function createAuthService({ connection, now = () => new Date(), reposito
       const fields = validateProfile(input);
       if (fields.displayName !== undefined) fields.displayNameSearch = displayNameSearch(fields.displayName);
       let updated;
-      try { updated = await repository.updateProfile(user._id, user.authVersion, fields); }
+      try { updated = await repository.updateProfile(user._id, user.authVersion, fields, now()); }
       catch (error) { identityConflict(error); }
       if (!updated) throw new HttpError(403, 'ACCOUNT_RESTRICTED', 'This account cannot edit its profile.');
       return selfUser(updated);

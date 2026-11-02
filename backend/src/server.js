@@ -6,6 +6,8 @@ import { createAuthService } from './modules/auth/service.js';
 import { assertAuthMigration } from './migrations/001-auth.js';
 import { assertPostsMigration } from './migrations/002-posts.js';
 import { createPostService } from './modules/posts/service.js';
+import { assertNetworkMigration } from './migrations/003-network.js';
+import { createNetworkService } from './modules/network/service.js';
 
 const database = createDatabase();
 let server;
@@ -79,6 +81,9 @@ async function start() {
     stage = 'posts';
     await assertPostsMigration(database.connection);
     const postService = createPostService({ connection: database.connection, cursorSecret: config.authSecret });
+    stage = 'network';
+    await assertNetworkMigration(database.connection);
+    const networkService = createNetworkService({ connection: database.connection, cursorSecret: config.authSecret });
     await postService.cleanupOrphans();
     if (stopping) return;
     orphanTimer = setInterval(() => {
@@ -89,7 +94,7 @@ async function start() {
     }, 60_000);
     orphanTimer.unref();
     stage = 'http';
-    server = createServer(createApp({ database, authService, postService, config }));
+    server = createServer(createApp({ database, authService, postService, networkService, config }));
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(config.port, config.host, () => {
@@ -117,6 +122,7 @@ try {
     database: 'MongoDB connection failed. Check MONGODB_URI, database availability, credentials, and network access.',
     authentication: 'Authentication initialization failed. Check the auth database migration.',
     posts: 'Post initialization failed. Run the database migrations and check MongoDB permissions.',
+    network: 'Member network initialization failed. Run the database migrations and check MongoDB permissions.',
     http: 'HTTP startup failed. Check HOST, PORT, and whether the port is already in use.',
   };
   console.error(`Startup failed: ${messages[stage]}`);

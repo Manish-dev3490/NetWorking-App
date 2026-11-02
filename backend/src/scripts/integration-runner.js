@@ -6,7 +6,7 @@ import { loadConfig } from '../config/env.js';
 // The configured application database is used solely for the existing ping test.
 try {
   const config = loadConfig();
-  const child = spawn(process.execPath, ['--test', 'test/auth-integration.test.js', 'test/posts-integration.test.js', 'test/database.test.js'], {
+  const child = spawn(process.execPath, ['--test', 'test/auth-integration.test.js', 'test/posts-integration.test.js', 'test/network-integration.test.js', 'test/database.test.js'], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     stdio: 'inherit',
     env: { ...process.env, TEST_MONGODB_URI: process.env.TEST_MONGODB_URI || config.mongoUri },

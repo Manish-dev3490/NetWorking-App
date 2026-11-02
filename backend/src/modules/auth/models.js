@@ -11,6 +11,8 @@ export function createAuthModels(connection) {
     displayNameSearch: { type: String, required: true },
     bio: { type: String, default: '' },
     visibility: { type: String, enum: ['public', 'private'], default: 'public' },
+    avatarAssetId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    policyVersion: { type: Number, min: 0, default: 0 },
     status: { type: String, enum: ['active', 'suspended', 'deleting', 'deleted'], default: 'active' },
     authVersion: { type: Number, required: true, default: 0, min: 0 },
   }, { ...options, timestamps: true, collection: 'users' });

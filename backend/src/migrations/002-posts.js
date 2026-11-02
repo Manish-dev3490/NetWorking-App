@@ -6,7 +6,7 @@ export async function assertPostsMigration(connection) {
   }
 }
 
-const validators = {
+export const postValidators = {
   media_assets: { $jsonSchema: {
     bsonType: 'object', required: ['ownerId', 'state', 'purpose', 'contentType', 'width', 'height', 'sizeBytes', 'uploadKey', 'contentHash', 'createdAt'],
     properties: {
@@ -41,7 +41,7 @@ export async function migratePosts(connection) {
   if (!db) throw new Error('Connect to MongoDB before running migrations.');
   const migrations = db.collection('schema_migrations');
   if (await migrations.findOne({ _id: migrationId })) return { applied: false, version: migrationId };
-  for (const [name, validator] of Object.entries(validators)) {
+  for (const [name, validator] of Object.entries(postValidators)) {
     const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
     if (!exists) await db.createCollection(name, { validator, validationLevel: 'strict', validationAction: 'error' });
     else await db.command({ collMod: name, validator, validationLevel: 'strict', validationAction: 'error' });

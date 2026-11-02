@@ -3,32 +3,33 @@ import mongoose from 'mongoose';
 import { HttpError } from '../../shared/http-error.js';
 import { createPostCursors } from './cursor.js';
 import {
-  MAX_MEMBER_BYTES, MAX_MEMBER_IMAGES, MAX_READY_UPLOADS, objectId, requestKey,
+  MAX_MEMBER_BYTES, MAX_MEMBER_IMAGES, MAX_READY_UPLOADS, mediaPurpose, objectId, requestKey,
   validateEdit, validateProcessedImage, validatePublish,
 } from './validation.js';
 
 const DAY = 24 * 60 * 60 * 1000;
-const authorProjection = { _id: 1, usernameNormalized: 1, displayName: 1, status: 1, visibility: 1 };
+const authorProjection = { _id: 1, usernameNormalized: 1, displayName: 1, avatarAssetId: 1, status: 1, visibility: 1 };
 const unavailable = () => new HttpError(404, 'NOT_FOUND', 'Post or photo not found.');
 const quotaError = () => new HttpError(409, 'MEDIA_QUOTA_EXCEEDED', 'Your photo storage limit has been reached. Remove unused uploads or delete a post before adding more.');
 const assetNotReady = () => new HttpError(409, 'ASSET_NOT_READY', 'A selected photo is unavailable or has already been used. Choose the photo again.');
 
 function mediaDto(asset) {
   return {
-    id: asset._id.toHexString(), status: asset.state, contentUrl: `/api/v1/media/${asset._id.toHexString()}/content`,
+    id: asset._id.toHexString(), status: asset.state, purpose: asset.purpose, contentUrl: `/api/v1/media/${asset._id.toHexString()}/content`,
     width: asset.width, height: asset.height, sizeBytes: asset.sizeBytes,
   };
 }
 
-function canRead(post, author, viewerId) {
+function canRead(post, author, viewerId, accepted = false) {
   return post?.status === 'published' && author?.status === 'active'
-    && (post.authorId.equals(viewerId) || author.visibility === 'public');
+    && (post.authorId.equals(viewerId) || author.visibility === 'public' || accepted);
 }
 
 function postDto(post, author, viewerId) {
   return {
     id: post._id.toHexString(),
-    author: { id: author._id.toHexString(), username: author.usernameNormalized, displayName: author.displayName },
+    author: { id: author._id.toHexString(), username: author.usernameNormalized, displayName: author.displayName,
+      avatarUrl: author.avatarAssetId ? `/api/v1/media/${author.avatarAssetId.toHexString()}/content` : null },
     caption: post.caption, hashtags: post.hashtags,
     media: post.media.map((item) => ({
       assetId: item.assetId.toHexString(), altText: item.altText, width: item.width, height: item.height,
@@ -53,6 +54,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
   const posts = db.collection('posts');
   const assets = db.collection('media_assets');
   const images = db.collection('media_images');
+  const follows = db.collection('follows');
   const cursors = createPostCursors(cursorSecret, now);
 
   async function activeViewer(viewer, session, write = false) {
@@ -85,6 +87,14 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     return users.findOne({ _id: post.authorId }, { session, projection: authorProjection });
   }
 
+  async function canViewAuthor(viewerId, author, session) {
+    if (author?.status !== 'active') return false;
+    if (author._id.equals(viewerId) || author.visibility === 'public') return true;
+    return Boolean(await follows.findOne({ followerId: viewerId, followingId: author._id, status: 'accepted' }, {
+      session, projection: { _id: 1 },
+    }));
+  }
+
   async function reclaimExpired(ownerId, date, session) {
     const stale = await assets.find({ ownerId, state: 'ready', expiresAt: { $lte: date } }, {
       session, projection: { _id: 1 },
@@ -99,7 +109,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     const post = await posts.findOne({ _id: id, status: 'published' }, { session });
     if (!post) throw unavailable();
     const author = await authorFor(post, session);
-    if (!canRead(post, author, viewerId)) throw unavailable();
+    if (!await canViewAuthor(viewerId, author, session)) throw unavailable();
     return { post, author };
   }
 
@@ -113,13 +123,21 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     return { post: postDto(existing, author, viewerId), replayed: true };
   }
 
-  async function list(viewer, query, scope) {
+  async function list(viewer, query, scope, targetId) {
     const member = await activeViewer(viewer);
     const limit = query.limit === undefined ? 10 : Number(query.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
       throw new HttpError(422, 'VALIDATION_ERROR', 'Choose a page size between 1 and 20.');
     }
-    let position = cursors.decode(query.cursor, member._id.toHexString(), scope);
+    const target = scope === 'user' ? objectId(targetId, 'userId') : null;
+    if (target && !await canViewAuthor(member._id, await users.findOne({ _id: target }, { projection: authorProjection }))) throw unavailable();
+    const cursorScope = target ? `user:${target.toHexString()}` : scope;
+    let followingIds;
+    if (scope === 'following') {
+      followingIds = await follows.distinct('followingId', { followerId: member._id, status: 'accepted' });
+      followingIds.push(member._id);
+    }
+    let position = cursors.decode(query.cursor, member._id.toHexString(), cursorScope);
     let lastExamined;
     const items = [];
     let scanned = 0;
@@ -127,6 +145,8 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     while (scanned < 200 && items.length < limit) {
       const match = { status: 'published' };
       if (scope === 'own') match.authorId = member._id;
+      if (target) match.authorId = target;
+      if (followingIds) match.authorId = { $in: followingIds };
       if (position) match.$or = [
         { createdAt: { $lt: position.date } },
         { createdAt: position.date, _id: { $lt: new mongoose.Types.ObjectId(position.id) } },
@@ -137,12 +157,22 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         { $lookup: { from: 'users', localField: 'authorId', foreignField: '_id', pipeline: [{ $project: authorProjection }], as: 'author' } },
       ]).toArray();
       if (!batch.length) { hasMore = false; break; }
+      // Refresh accepted relationships for this bounded batch. A pending
+      // request never grants private content or Following-feed membership.
+      const accepted = scope === 'following' || scope === 'user'
+        ? await follows.find({ followerId: member._id, followingId: { $in: batch.map((post) => post.authorId) }, status: 'accepted' }, {
+          projection: { followingId: 1 },
+        }).toArray() : [];
+      const acceptedIds = new Set(accepted.map((follow) => follow.followingId.toHexString()));
       for (let index = 0; index < batch.length; index += 1) {
         const candidate = batch[index];
         scanned += 1;
         lastExamined = candidate;
         const author = candidate.author[0];
-        if (canRead(candidate, author, member._id) && (scope === 'own' || author.visibility === 'public')) {
+        const acceptedAuthor = acceptedIds.has(candidate.authorId.toHexString());
+        if (canRead(candidate, author, member._id, acceptedAuthor)
+          && (scope !== 'recent' || author.visibility === 'public')
+          && (scope !== 'following' || candidate.authorId.equals(member._id) || acceptedAuthor)) {
           items.push(postDto(candidate, author, member._id));
         }
         hasMore = index < batch.length - 1 || batch.length === batchLimit;
@@ -153,18 +183,20 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     }
     return {
       items, hasMore,
-      nextCursor: hasMore && lastExamined ? cursors.encode(member._id.toHexString(), scope, lastExamined) : null,
+      nextCursor: hasMore && lastExamined ? cursors.encode(member._id.toHexString(), cursorScope, lastExamined) : null,
     };
   }
 
   return {
-    async assertCanUpload(viewer, uploadKey) {
+    async assertCanUpload(viewer, uploadKey, purpose = 'post') {
       const key = requestKey(uploadKey, 'X-Upload-Key');
+      const intendedPurpose = mediaPurpose(purpose);
       await connection.transaction(async (session) => {
         const member = await activeViewer(viewer, session, true);
         const date = now();
         const existing = await assets.findOne({ ownerId: member._id, uploadKey: key }, { session });
         if (existing) {
+          if (existing.purpose !== intendedPurpose) throw new HttpError(409, 'IDEMPOTENCY_CONFLICT', 'This upload request was already used for another purpose.');
           if (existing.state === 'ready' && existing.expiresAt <= date) throw assetNotReady();
           return;
         }
@@ -185,7 +217,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
           const date = now();
           const existing = await assets.findOne({ ownerId: member._id, uploadKey: data.uploadKey }, { session });
           if (existing) {
-            if (existing.contentHash !== hash) throw new HttpError(409, 'IDEMPOTENCY_CONFLICT', 'This upload request was already used for another photo.');
+            if (existing.contentHash !== hash || existing.purpose !== data.purpose) throw new HttpError(409, 'IDEMPOTENCY_CONFLICT', 'This upload request was already used for another photo or purpose.');
             if (existing.state === 'ready' && existing.expiresAt <= date) throw assetNotReady();
             result = mediaDto(existing);
             return;
@@ -193,7 +225,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
           await reclaimExpired(member._id, date, session);
           await checkQuota(member._id, date, session, data.data.length);
           const asset = {
-            _id: new mongoose.Types.ObjectId(), ownerId: member._id, state: 'ready', purpose: 'post',
+            _id: new mongoose.Types.ObjectId(), ownerId: member._id, state: 'ready', purpose: data.purpose,
             contentType: data.contentType, width: data.width, height: data.height, sizeBytes: data.data.length,
             uploadKey: data.uploadKey, contentHash: hash, createdAt: date, expiresAt: new Date(date.getTime() + DAY),
           };
@@ -206,7 +238,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         if (error.code !== 11000) throw error;
         const member = await activeViewer(viewer);
         const existing = await assets.findOne({ ownerId: member._id, uploadKey: data.uploadKey });
-        if (!existing || existing.contentHash !== hash) throw new HttpError(409, 'IDEMPOTENCY_CONFLICT', 'This upload request conflicts with another photo.');
+        if (!existing || existing.contentHash !== hash || existing.purpose !== data.purpose) throw new HttpError(409, 'IDEMPOTENCY_CONFLICT', 'This upload request conflicts with another photo or purpose.');
         if (existing.state === 'ready' && existing.expiresAt <= now()) throw assetNotReady();
         result = mediaDto(existing);
       }
@@ -220,7 +252,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         const asset = await assets.findOne({ _id: id }, { session });
         if (!asset) return;
         if (!asset.ownerId.equals(member._id)) throw unavailable();
-        if (asset.state !== 'ready') throw new HttpError(409, 'ASSET_IN_USE', 'This photo belongs to a published post. Delete the post to remove it.');
+        if (asset.state !== 'ready') throw new HttpError(409, 'ASSET_IN_USE', 'This photo is in use. Remove it from its post or profile first.');
         await images.deleteOne({ _id: id }, { session });
         await assets.deleteOne({ _id: id }, { session });
       });
@@ -233,7 +265,10 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
       if (!asset) throw unavailable();
       if (asset.state === 'ready') {
         if (!asset.ownerId.equals(member._id) || asset.expiresAt <= now()) throw unavailable();
-      } else if (asset.state === 'attached' && asset.postId) {
+      } else if (asset.state === 'attached' && asset.purpose === 'avatar') {
+        const owner = await users.findOne({ _id: asset.ownerId, status: 'active', avatarAssetId: id }, { projection: { _id: 1 } });
+        if (!owner) throw unavailable();
+      } else if (asset.state === 'attached' && asset.purpose === 'post' && asset.postId) {
         const { post } = await visiblePost(member._id, asset.postId);
         if (!post.media.some((item) => item.assetId.equals(id))) throw unavailable();
       } else throw unavailable();
@@ -256,7 +291,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
           if (previous) { result = previous; return; }
           const date = now();
           const ids = validated.media.map((item) => item.assetId);
-          const selected = await assets.find({ _id: { $in: ids }, ownerId: member._id, state: 'ready', expiresAt: { $gt: date } }, { session }).toArray();
+          const selected = await assets.find({ _id: { $in: ids }, ownerId: member._id, purpose: 'post', state: 'ready', expiresAt: { $gt: date } }, { session }).toArray();
           if (selected.length !== ids.length) throw assetNotReady();
           const byId = new Map(selected.map((asset) => [asset._id.toHexString(), asset]));
           const post = {
@@ -268,7 +303,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
             }),
             status: 'published', editVersion: 0, publishKey, requestHash, createdAt: date, updatedAt: date,
           };
-          const claimed = await assets.updateMany({ _id: { $in: ids }, ownerId: member._id, state: 'ready', expiresAt: { $gt: date } }, {
+          const claimed = await assets.updateMany({ _id: { $in: ids }, ownerId: member._id, purpose: 'post', state: 'ready', expiresAt: { $gt: date } }, {
             $set: { state: 'attached', postId: post._id }, $unset: { expiresAt: '' },
           }, { session });
           if (claimed.modifiedCount !== ids.length) throw assetNotReady();
@@ -292,6 +327,8 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
 
     listRecent(viewer, query = {}) { return list(viewer, query, 'recent'); },
     listOwn(viewer, query = {}) { return list(viewer, query, 'own'); },
+    listFollowing(viewer, query = {}) { return list(viewer, query, 'following'); },
+    listUser(viewer, targetId, query = {}) { return list(viewer, query, 'user', targetId); },
 
     async updatePost(viewer, postId, input) {
       const id = objectId(postId, 'postId');
@@ -325,7 +362,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         if (!post) return;
         if (!post.authorId.equals(member._id)) {
           const author = await authorFor(post, session);
-          if (!canRead(post, author, member._id)) throw unavailable();
+          if (!canRead(post, author, member._id, await canViewAuthor(member._id, author, session))) throw unavailable();
           throw new HttpError(403, 'FORBIDDEN', 'Only the author can delete this post.');
         }
         if (post.status === 'deleted') return;

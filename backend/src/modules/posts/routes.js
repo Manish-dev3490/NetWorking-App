@@ -2,6 +2,7 @@ import express, { Router } from 'express';
 import { HttpError } from '../../shared/http-error.js';
 import { sessionToken } from '../../shared/session-token.js';
 import { imageContentType, MAX_IMAGE_BYTES, processImage } from '../media/process-image.js';
+import { mediaPurpose } from './validation.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 let activeUploads = 0;
@@ -45,7 +46,7 @@ export function createPostRouter({ authService, postService }) {
 
   router.use(async (req, res, next) => {
     // Only claimed post/media routes resolve a member; leave unrelated API routes alone.
-    if (!/^\/(?:posts(?:\/|$)|media(?:\/|$)|me\/posts\/?$)/i.test(req.path)) return next('router');
+    if (!/^\/(?:posts(?:\/|$)|media(?:\/|$)|me\/posts\/?$|users\/[^/]+\/posts\/?$)/i.test(req.path)) return next('router');
     const { user } = await authService.resolveSession(sessionToken(req));
     if (user.status !== 'active') throw new HttpError(403, 'ACCOUNT_RESTRICTED', 'This account cannot access posts.');
     req.viewer = user;
@@ -61,6 +62,7 @@ export function createPostRouter({ authService, postService }) {
   router.post('/media/uploads', async (req, res) => {
     const uploadKey = key(req);
     const contentType = imageContentType(req);
+    const purpose = mediaPurpose(req.get('X-Media-Purpose') ?? 'post');
     if (activeUploads >= 2) {
       res.set('Retry-After', '3');
       throw new HttpError(503, 'SERVICE_UNAVAILABLE', 'Photo uploads are busy. Please try again shortly.');
@@ -70,7 +72,7 @@ export function createPostRouter({ authService, postService }) {
     const deadline = setTimeout(() => req.destroy(), 30_000);
     deadline.unref();
     try {
-      await postService.assertCanUpload(req.viewer, uploadKey);
+      await postService.assertCanUpload(req.viewer, uploadKey, purpose);
       const parser = express.raw({ type: () => true, limit: MAX_IMAGE_BYTES, inflate: false });
       try {
         await new Promise((resolve, reject) => parser(req, res, (error) => error ? reject(error) : resolve()));
@@ -80,7 +82,7 @@ export function createPostRouter({ authService, postService }) {
         throw new HttpError(400, 'BAD_REQUEST', 'The photo upload was interrupted or malformed.');
       }
       const processed = await processImage(req.body, contentType);
-      const media = await postService.uploadImage(req.viewer, { ...processed, uploadKey });
+      const media = await postService.uploadImage(req.viewer, { ...processed, uploadKey, purpose });
       res.location(`/api/v1/media/${media.id}/content`);
       respond(req, res, media, 201);
     } finally {
@@ -106,8 +108,16 @@ export function createPostRouter({ authService, postService }) {
     const page = await postService.listRecent(req.viewer, pageOptions(req));
     respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
   });
+  router.get('/posts/following', async (req, res) => {
+    const page = await postService.listFollowing(req.viewer, pageOptions(req));
+    respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
+  });
   router.get('/me/posts', async (req, res) => {
     const page = await postService.listOwn(req.viewer, pageOptions(req));
+    respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
+  });
+  router.get('/users/:userId/posts', async (req, res) => {
+    const page = await postService.listUser(req.viewer, req.params.userId, pageOptions(req));
     respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
   });
   router.post('/posts', async (req, res) => {

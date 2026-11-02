@@ -34,7 +34,7 @@ function card(request, onChanged) {
   const source = cardSource.slice(cardSource.indexOf('export default function RealPostCard('), cardSource.indexOf('  return <article'))
     .replace('export default ', '');
   const create = runInNewContext(`${source}\nreturn { remove };\n}\nRealPostCard`, {
-    ...lifecycle, AbortController, apiRequest: request, describeError: (error) => error.message,
+    ...lifecycle, AbortController, useContext: () => null, PostEditorContext: {}, apiRequest: request, describeError: (error) => error.message,
   });
   const actions = create({ post: { id: 'post-a', author: { id: 'alice' }, media: [], canManage: true }, user: { id: 'alice' }, onChanged });
   const cleanups = lifecycle.effects.map((effect) => effect());

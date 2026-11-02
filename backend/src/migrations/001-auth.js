@@ -6,7 +6,7 @@ export async function assertAuthMigration(connection) {
   }
 }
 
-const validators = {
+export const authValidators = {
   users: {
     $jsonSchema: { bsonType: 'object', required: ['emailNormalized', 'usernameNormalized', 'passwordHash', 'displayName', 'displayNameSearch', 'status', 'authVersion', 'createdAt', 'updatedAt'],
       properties: {
@@ -41,7 +41,7 @@ export async function migrateAuth(connection) {
   const migrations = db.collection('schema_migrations');
   if (await migrations.findOne({ _id: migrationId })) return { applied: false, version: migrationId };
 
-  for (const [name, validator] of Object.entries(validators)) {
+  for (const [name, validator] of Object.entries(authValidators)) {
     const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
     if (!exists) await db.createCollection(name, { validator, validationLevel: 'strict', validationAction: 'error' });
     else await db.command({ collMod: name, validator, validationLevel: 'strict', validationAction: 'error' });

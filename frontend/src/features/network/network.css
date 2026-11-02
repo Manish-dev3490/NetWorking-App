@@ -1,0 +1,89 @@
+.network-page { min-height: 100dvh; }
+.network-page-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 1060px; margin: auto; padding: 26px 28px; }
+.network-page-header nav { display: flex; align-items: center; gap: 18px; }
+.network-page-header .button { min-height: 36px; padding: 8px 14px; font-size: 11px; }
+.network-page-header .text-button { font-size: 11px; }
+.network-content { max-width: 720px; margin: 23px auto 0; padding: 0 24px 60px; }
+.network-intro { margin-bottom: 27px; }
+.network-intro h1 { margin-top: 9px; color: var(--color-primary-dark); font-size: 33px; line-height: 1.35; letter-spacing: -1px; font-weight: 500; overflow-wrap: anywhere; }
+.network-intro h1:focus { outline: none; }
+.network-intro > p:last-child:not(.auth-eyebrow) { margin-top: 10px; max-width: 520px; color: var(--color-muted); font-size: 12px; line-height: 1.9; overflow-wrap: anywhere; }
+.network-card { padding: 24px; margin-top: 22px; border: 1px solid var(--color-border); border-radius: 17px; background: white; box-shadow: var(--shadow-card); }
+.network-card > h2, .member-profile-posts > h2 { margin-bottom: 17px; color: #405647; font-size: 17px; font-weight: 500; letter-spacing: -.4px; overflow-wrap: anywhere; }
+.network-error { margin-top: 15px; padding: 11px 14px; border-radius: 10px; color: #904d3c; background: #faf1e9; font-size: 12px; line-height: 1.8; }
+.network-error .text-button { padding-left: 0; color: #7d4537; }
+.network-empty { padding: 24px 0; color: var(--color-muted); font-size: 12px; text-align: center; }
+.network-load-more { display: flex; margin: 20px auto 0; }
+.network-hint { margin: 10px 1px 0; color: var(--color-muted); font-size: 10px; line-height: 1.8; }
+.network-welcome, .private-profile-gate { padding: 38px 18px; text-align: center; }
+.network-welcome h2, .private-profile-gate h2 { color: #405647; font-size: 19px; font-weight: 500; letter-spacing: -.5px; }
+.network-welcome p, .private-profile-gate p { max-width: 360px; margin: 10px auto 0; color: var(--color-muted); font-size: 12px; line-height: 1.9; }
+.member-search-form { display: grid; grid-template-columns: minmax(0, 1fr) 135px auto; align-items: end; gap: 12px; padding: 21px; border: 1px solid var(--color-border); border-radius: 15px; background: white; }
+.member-search-form .form-field { margin: 0; min-width: 0; }
+.member-search-form .form-field label { display: block; margin-bottom: 8px; color: #435747; font-size: 11px; }
+.member-query-input { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #dce4da; border-radius: 9px; color: var(--color-muted); }
+.member-query-input:focus-within { outline: 2px solid #8aa590; outline-offset: 2px; }
+.member-query-input input { width: 100%; min-width: 0; height: 43px; padding: 8px 0; border: 0; outline: none; font-size: 12px; background: transparent; }
+.member-search-form select, .profile-visibility-select { width: 100%; min-height: 44px; padding: 9px 10px; border: 1px solid #dce4da; border-radius: 9px; background: white; color: var(--color-ink); font-size: 12px; }
+.member-search-form > .button { font-size: 11px; padding-inline: 13px; }
+.member-row, .request-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 16px 0; }
+.member-row + .member-row, .request-row + .request-row { border-top: 1px solid #edf0e9; }
+.member-identity { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0; text-align: left; }
+.member-identity > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.member-identity strong { color: #3d5143; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.member-identity span span { margin-top: 2px; color: var(--color-muted); font-size: 10px; overflow-wrap: anywhere; }
+.member-identity:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+.compact-button { min-height: 34px; padding: 8px 11px; font-size: 10px; }
+.request-actions { display: flex; flex-shrink: 0; gap: 7px; }
+.member-profile-top { display: flex; align-items: center; gap: 20px; }
+.member-profile-top > div { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 7px; }
+.member-profile-top > .button { min-height: 37px; padding: 9px 14px; font-size: 11px; }
+.privacy-label { display: inline-flex; align-items: center; gap: 6px; color: var(--color-muted); font-size: 11px; }
+.follows-you { padding: 2px 7px; border-radius: 5px; background: #edf2e9; color: #64735f; font-size: 9px; }
+.member-profile-bio { margin: 22px 0 0; color: #52614e; font-size: 12px; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
+.member-counts { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 25px; padding-top: 18px; border-top: 1px solid var(--color-border); }
+.member-counts > button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px; border-radius: 8px; }
+.member-counts > button:hover, .member-counts > button[aria-pressed=true] { background: #f0f5ec; }
+.member-counts strong { color: #3d5143; font-size: 18px; font-weight: 500; }
+.member-counts span { color: var(--color-muted); font-size: 10px; }
+.member-relationship-note { margin-top: 19px; color: #70816b; font-size: 11px; }
+.member-profile-posts { margin-top: 29px; }
+.private-profile-gate { margin-top: 22px; padding-block: 42px; border: 1px solid var(--color-border); border-radius: 17px; background: #fff; }
+.avatar-editor { display: flex; align-items: center; gap: 14px; margin: 22px 0 26px; }
+.avatar-editor-controls { display: flex; flex: 1; flex-wrap: wrap; gap: 7px 10px; align-items: center; }
+.avatar-file-label { position: relative; overflow: hidden; cursor: pointer; }
+.avatar-file-label input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.avatar-file-label:focus-within { outline: 3px solid #688a74; outline-offset: 3px; }
+.avatar-editor-controls > p { flex-basis: 100%; color: var(--color-muted); font-size: 10px; line-height: 1.8; }
+.profile-community-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 17px; }
+.profile-community-actions .button { min-height: 36px; padding: 8px 12px; font-size: 11px; }
+.real-post-author.is-profile-link { border-radius: 8px; text-align: left; padding: 0; }
+.real-post-author.is-profile-link:hover h2 { text-decoration: underline; text-underline-offset: 3px; }
+.post-author-name { padding: 0; font: inherit; text-align: left; overflow-wrap: anywhere; }
+.post-author-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 600px) {
+  .network-page-header { align-items: flex-start; padding: 21px 18px; gap: 10px; }
+  .network-page-header .brand-copy > span { display: none; }
+  .network-page-header .brand-mark { width: 31px; height: 31px; border-radius: 10px; }
+  .network-page-header .brand { gap: 7px; padding: 0; }
+  .network-page-header .brand-copy strong { font-size: 21px; }
+  .network-page-header nav { flex-wrap: wrap; justify-content: flex-end; gap: 6px 12px; }
+  .network-page-header nav .text-button { padding: 3px 0; font-size: 9px; }
+  .network-page-header nav .button { min-height: 29px; padding: 5px 9px; font-size: 9px; }
+  .network-content { margin-top: 17px; padding-inline: 18px; }
+  .network-intro h1 { font-size: 29px; }
+  .network-card { padding: 21px 18px; }
+  .member-search-form { grid-template-columns: minmax(0, 1fr) 115px; padding: 17px; }
+  .member-search-form > .form-field:first-child { grid-column: 1 / -1; }
+  .member-search-form > .button { height: 44px; }
+  .member-profile-top { flex-wrap: wrap; gap: 14px; }
+  .member-profile-top > .button { width: 100%; }
+  .member-profile-top > .avatar { width: 74px !important; height: 74px !important; }
+  .request-row { align-items: flex-start; flex-direction: column; gap: 13px; }
+  .request-actions { align-self: flex-end; }
+  .member-row { gap: 8px; }
+  .member-row .compact-button { max-width: 100px; font-size: 9px; }
+  .avatar-editor { gap: 12px; align-items: flex-start; }
+  .avatar-editor-controls .compact-button { font-size: 9px; }
+  .feed-tabs { gap: 19px; }
+}
