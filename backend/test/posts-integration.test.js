@@ -7,6 +7,7 @@ import { migrateAuth } from '../src/migrations/001-auth.js';
 import { migratePosts } from '../src/migrations/002-posts.js';
 import { migrateEngagement } from '../src/migrations/004-engagement.js';
 import { migrateSavedPosts } from '../src/migrations/005-saved-posts.js';
+import { migrateNotifications } from '../src/migrations/006-notifications.js';
 import { createAuthService } from '../src/modules/auth/service.js';
 import { createPostService } from '../src/modules/posts/service.js';
 
@@ -39,6 +40,7 @@ test('real MongoDB photo storage, publication, visibility and cleanup lifecycle'
   await migratePosts(connection);
   await migrateEngagement(connection);
   await migrateSavedPosts(connection);
+  await migrateNotifications(connection);
   let currentTime = new Date();
   const service = createPostService({ connection, now: () => new Date(currentTime), cursorSecret: 'posts-integration-cursor-secret' });
   const auth = createAuthService({ connection });

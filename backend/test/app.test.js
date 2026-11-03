@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import * as zlib from 'node:zlib';
 import { createApp } from '../src/app.js';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-async function serve(t, database = { isAvailable: async () => false }) {
-  const server = createServer(createApp({ database }));
+async function serve(t, database = { isAvailable: async () => false }, frontendDirectory) {
+  const server = createServer(createApp({ database, frontendDirectory }));
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
@@ -18,6 +21,32 @@ async function serve(t, database = { isAvailable: async () => false }) {
   }));
   return `http://127.0.0.1:${server.address().port}`;
 }
+
+test('production serves frontend routes and assets without masking API or health errors', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'gather-frontend-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const html = '<!doctype html><title>Gather</title>';
+  await mkdir(join(directory, 'assets'));
+  await Promise.all([
+    writeFile(join(directory, 'index.html'), html),
+    writeFile(join(directory, 'assets', 'app-hashed.js'), 'export {};'),
+  ]);
+  const origin = await serve(t, { isAvailable: async () => true }, directory);
+  for (const path of ['/', '/notifications', '/p/507f1f77bcf86cd799439011']) {
+    const response = await fetch(`${origin}${path}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+    assert.equal(await response.text(), html);
+  }
+  const asset = await fetch(`${origin}/assets/app-hashed.js`);
+  assert.equal(asset.status, 200);
+  assert.match(asset.headers.get('cache-control'), /immutable/);
+  assert.equal(await asset.text(), 'export {};');
+  for (const path of ['/api/v1/missing', '/health/missing', '/assets/missing.js']) {
+    await errorResponse(await fetch(`${origin}${path}`), 404, 'NOT_FOUND');
+  }
+  assert.deepEqual(await (await fetch(`${origin}/health/ready`)).json(), { status: 'ready' });
+});
 
 async function errorResponse(response, status, code) {
   assert.equal(response.status, status);

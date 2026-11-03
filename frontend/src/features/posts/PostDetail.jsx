@@ -6,7 +6,7 @@ import RealPostCard from './RealPostCard.jsx';
 import PostComments from './PostComments.jsx';
 import { observeEngagement } from './post-engagement.js';
 
-export default function PostDetail({ postId, user, onBack, backToSaved = false, onChanged, onOpenProfile, revision }) {
+export default function PostDetail({ postId, user, onBack, backToSaved = false, backToNotifications = false, onChanged, onOpenProfile, revision }) {
   const [post, setPost] = useState(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState('');
@@ -54,7 +54,7 @@ export default function PostDetail({ postId, user, onBack, backToSaved = false, 
     setPost(null);
     changed();
   }
-  return <main className="post-detail-page"><header className="post-detail-header"><button type="button" className="button button-secondary" onClick={onBack}><Icon name="arrow-left" size={17} />{backToSaved ? 'Back to saved posts' : 'Back to feed'}</button><h1 ref={headingRef} tabIndex={-1}>A Gather moment</h1></header>
+  return <main className="post-detail-page"><header className="post-detail-header"><button type="button" className="button button-secondary" onClick={onBack}><Icon name="arrow-left" size={17} />{backToNotifications ? 'Back to notifications' : backToSaved ? 'Back to saved posts' : 'Back to feed'}</button><h1 ref={headingRef} tabIndex={-1}>A Gather moment</h1></header>
     {pending && <p className="feed-loading" role="status">Gathering this moment…</p>}{error && <div className="empty-state" role="alert"><span className="empty-mark"><Icon name="leaf" size={28} /></span><h2>This moment isn’t here.</h2><p>{error}</p><button type="button" className="button button-secondary" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
     {post && <div hidden={pending || Boolean(error)}>
       <RealPostCard post={post} user={user} detail onChanged={changed} onAccessLost={accessLost} onOpenPost={() => {}} onOpenProfile={onOpenProfile} />

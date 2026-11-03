@@ -7,7 +7,7 @@ import PostFeed from '../posts/PostFeed.jsx';
 import MemberList from './MemberList.jsx';
 import NetworkPage from './NetworkPage.jsx';
 
-export default function MemberProfile({ user, memberId, revision, onBack, onFind, onRequests, onOpenProfile, onEdit, onOpenPost, onCreate, onChanged }) {
+export default function MemberProfile({ user, memberId, revision, onBack, backLabel, onFind, onRequests, onOpenProfile, onEdit, onOpenPost, onCreate, onChanged }) {
   const [profile, setProfile] = useState(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState('');
@@ -41,7 +41,7 @@ export default function MemberProfile({ user, memberId, revision, onBack, onFind
     finally { if (mutationRef.current === controller) mutationRef.current = null; if (!controller.signal.aborted) setChanging(false); }
   }
   const status = profile?.relationship.followingStatus;
-  return <NetworkPage title={profile ? profile.displayName : 'A Gather profile'} description={profile ? `@${profile.username}` : undefined} onBack={onBack} onFind={onFind} onRequests={onRequests}>
+  return <NetworkPage title={profile ? profile.displayName : 'A Gather profile'} description={profile ? `@${profile.username}` : undefined} onBack={onBack} backLabel={backLabel} onFind={onFind} onRequests={onRequests}>
     {pending && <p className="feed-loading" role="status">Getting to know this member…</p>}
     {error && <div className="empty-state" role="alert"><h2>This profile isn’t available.</h2><p>{error}</p><button type="button" className="button button-secondary" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
     {profile && <><section className="network-card member-profile-card" aria-label={`${profile.displayName}'s profile`}><div className="member-profile-top"><Avatar src={profile.avatarUrl} name={profile.displayName} size={88} /><div><span className="privacy-label"><Icon name={profile.visibility === 'private' ? 'lock' : 'globe'} size={14} />{profile.visibility === 'private' ? 'Private account' : 'Public account'}</span>{profile.relationship.followedBy && !profile.isSelf && <span className="follows-you">Follows you</span>}</div>{profile.isSelf ? <button type="button" className="button button-secondary" onClick={onEdit}>Edit profile</button> : <button type="button" className={`button ${status === 'none' ? 'button-primary' : 'button-secondary'}`} disabled={changing} onClick={changeFollow}>{changing ? 'Updating…' : status === 'accepted' ? 'Unfollow' : status === 'pending' ? 'Cancel request' : profile.visibility === 'private' ? 'Request to follow' : 'Follow'}</button>}</div>

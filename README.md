@@ -81,6 +81,21 @@ Saved checks current post visibility on every page request. Load more rechecks t
 | `PUT /posts/:id/save` | Saves a visible post and returns `savedByMe` |
 | `DELETE /posts/:id/save` | Unsaves a visible post and returns `savedByMe` |
 
+## In-app notifications
+
+The Notifications inbox shows new followers, incoming private follow requests, approvals of your follow requests, and likes or comments on your posts. New activity is saved in MongoDB and shown newest first. The navigation badge counts unread notifications. Open a notification to mark it as read and go to the member, Requests page or post. You can also mark items individually or mark all as read from the inbox.
+
+Notifications store actor and target references. They omit post captions, photos and comment text. The inbox and unread count recheck current access and omit deleted or unavailable content and resolved requests. Repeated writes and actions on your own posts do not add duplicate notifications.
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /notifications` | Lists visible notifications with `limit`, `cursor` and an unread count |
+| `GET /notifications/unread-count` | Returns the current unread count |
+| `PATCH /notifications/:id/read` | Marks a visible notification as read |
+| `PATCH /notifications/read-all` | Marks the inbox as read |
+
+All notification requests bind `X-Account-Id` to the signed-in account. Read-state changes also require the app's CSRF protection.
+
 ## Members and follows
 
 Open a post author's profile or search for a member by username or display name. Member profiles show their photo and relationship state. Public profiles, own profiles and accepted private followers can access the biography, post count, follower/following counts and posts. Other viewers see only minimal identity and a private-account gate; private counts and biography are omitted from the API response.
@@ -144,7 +159,7 @@ Run the explicit database migration before starting the backend:
 npm.cmd run db:migrate
 ```
 
-Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migration `004-engagement` adds the like and comment collections and indexes. Migration `005-saved-posts` adds the bookmark collection and indexes. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all five migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
+Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migration `004-engagement` adds the like and comment collections and indexes. Migration `005-saved-posts` adds the bookmark collection and indexes. Migration `006-notifications` adds the inbox collection and indexes. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all six migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
 
 Start these commands in separate terminals:
 
@@ -166,7 +181,9 @@ Keep browser and API requests on one origin through the development proxy or a h
 
 The bounded rate limiter is in memory and local to one backend process. Signup permits 10 attempts per IP per hour; login permits 30 per IP and 10 per normalized email per 15 minutes. Other mutations permit 120 per IP per minute. Limits reset when the process restarts and are not shared across multiple instances. `429` responses include `Retry-After`.
 
-Express currently uses the socket address for `req.ip`. Before deployment behind a reverse proxy, configure trusted proxy addresses or hops for that specific topology so client IP limits remain meaningful. Do not blindly trust arbitrary `X-Forwarded-For` headers. Multiple-instance deployment also needs a deliberate shared limiting strategy.
+Express uses the socket address for `req.ip` by default. Set `TRUST_PROXY_HOPS` only when every public route goes through a verified number of trusted proxies and the app has no direct public path. The single-process rate limiter requires a shared store before scaling to multiple instances.
+
+For a single-service deployment, build from the repository root with `npm ci --include=dev && npm run build`. Set `NODE_ENV=production`, `HOST=0.0.0.0`, and `APP_ORIGIN` to the exact public HTTPS origin. Use the host's `PORT`, a separate production Atlas database and scoped credentials in `MONGODB_URI`, and a production-only `AUTH_SECRET`. Run `npm run db:migrate` once against that production database, then start with `npm start`. Configure the host to check `/health/ready`. Express serves the built frontend and API on the same origin.
 
 ## Validation and health
 
@@ -195,13 +212,13 @@ Startup waits for MongoDB and checks migration readiness before exposing HTTP. L
 
 JSON bodies are limited to exactly 32 KiB. The dedicated raw image upload route has its separate 5 MiB limit. API successes use `{data,meta:{requestId}}`; lists also include `nextCursor` and `hasMore` in `meta`. Errors use `{error:{code,message,fields?},meta:{requestId}}`. Every response receives a generated `X-Request-Id`. Caller-supplied IDs are ignored, and raw database errors, password hashes and session tokens are never returned. Image bytes, health and empty `204` responses are documented exceptions.
 
-The production frontend is written to `frontend/dist`. `npm.cmd run preview` serves that build but does not provide a production `/api` reverse proxy; use the same-origin hosting arrangement when testing the complete account flow.
+The production frontend is written to `frontend/dist`. The preview command serves the frontend build. Run the production backend to exercise the same-origin frontend and API together.
 
 ## Homepage and implementation structure
 
 The Gather UI uses forest green and sage, an off-white canvas, Inter typography and responsive photo cards. Desktop has three columns, tablet a compact navigation rail and mobile top/bottom navigation. Shared visual tokens live in `frontend/src/styles/global.css`.
 
-The homepage uses real Recent, Following and Your posts feeds, image carousels, author profile links, owner post actions and empty/loading/error states. Member search queries the backend; the separate loaded-post filter is labelled accordingly. Own-profile editing includes visibility and profile photos. Member pages show authorized posts and relationship lists, and the Requests page supports approval/rejection. Saved opens the signed-in member's bookmarks. Notifications and other future destinations still show informational dialogs.
+The homepage uses real Recent, Following and Your posts feeds, image carousels, author profile links, owner post actions and empty/loading/error states. Member search queries the backend; the separate loaded-post filter is labelled accordingly. Own-profile editing includes visibility and profile photos. Member pages show authorized posts and relationship lists, and the Requests page supports approval/rejection. Saved opens the signed-in member's bookmarks, and Notifications opens their activity inbox.
 
 Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoDB media route. The old design-preview feed components remain isolated in `features/feed/` and are no longer rendered by Home.
 
@@ -221,6 +238,7 @@ Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoD
 - `backend/src/migrations/003-network.js`: relationship/search indexes and profile-photo/policy schema.
 - `backend/src/migrations/004-engagement.js`: post like and comment schema and indexes.
 - `backend/src/migrations/005-saved-posts.js`: bookmark schema and indexes.
+- `backend/src/migrations/006-notifications.js`: notification schema and indexes.
 - `backend/src/middleware/`: transport, request IDs, CSRF/rate limits and safe errors.
 - `backend/src/config/`: environment validation and reusable MongoDB connection.
 - `backend/test/`: isolated HTTP/unit tests and optional real-database integration tests.
@@ -236,8 +254,8 @@ Original documents in `docs/` remain read-only:
 
 The database/API documents govern V1 technical scope where older proposals differ. Explicit product-owner decisions override their email-verification and external-object-storage proposals: signup skips verification, and uploaded product photos will be stored in MongoDB Atlas. The source documents themselves have not been changed. This slice combines their Origin/custom-header requirements with signed session-bound CSRF tokens.
 
-Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, likes/unlikes, flat comments with author editing/deletion, Saved posts, transport security, health checks and schema/index migrations.
+Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, likes/unlikes, flat comments with author editing/deletion, Saved posts, in-app notifications, transport security, health checks and schema/index migrations.
 
 Product-owner media decisions are implemented above: MongoDB binary storage and 5 MiB limits replace the original external-storage proposal. Image bytes count toward Atlas storage usage. Profiles, follows and the Following feed now form the application's core networking flow.
 
-Password recovery must also be completed before inviting external testers. Custom Saved collections, hashtag search, notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.
+Password recovery must also be completed before inviting external testers. Custom Saved collections, hashtag search, push and email notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.

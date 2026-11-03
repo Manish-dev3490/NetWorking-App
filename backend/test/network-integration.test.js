@@ -8,9 +8,12 @@ import { migratePosts } from '../src/migrations/002-posts.js';
 import { migrateNetwork } from '../src/migrations/003-network.js';
 import { migrateEngagement } from '../src/migrations/004-engagement.js';
 import { migrateSavedPosts } from '../src/migrations/005-saved-posts.js';
+import { migrateNotifications } from '../src/migrations/006-notifications.js';
 import { createAuthService } from '../src/modules/auth/service.js';
 import { createNetworkService } from '../src/modules/network/service.js';
 import { createPostService } from '../src/modules/posts/service.js';
+import { createNotificationService } from '../src/modules/notifications/service.js';
+import { createNotificationWriter } from '../src/modules/notifications/writer.js';
 
 const fails = (status, code) => (error) => error.status === status && error.code === code;
 const objectId = (value) => new mongoose.Types.ObjectId(value);
@@ -43,10 +46,13 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
   await migrateEngagement(connection);
   assert.equal((await migrateSavedPosts(connection)).applied, true);
   assert.equal((await migrateSavedPosts(connection)).applied, false);
+  assert.equal((await migrateNotifications(connection)).applied, true);
+  assert.equal((await migrateNotifications(connection)).applied, false);
   let currentTime = new Date();
   const now = () => new Date(currentTime);
   const network = createNetworkService({ connection, now, cursorSecret: 'network-integration-cursor-secret' });
   const posts = createPostService({ connection, now, cursorSecret: 'network-integration-post-secret' });
+  const notifications = createNotificationService({ connection, now, cursorSecret: 'notification-integration-secret' });
   const auth = createAuthService({ connection, now });
   const password = 'a networking integration test password';
   const register = (username, displayName) => auth.register({ email: `${username}@example.com`, username, displayName, password });
@@ -523,6 +529,99 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     await posts.removeUpload(publicMember.user, firstAvatar.id);
     assert.equal((await upload(publicMember, 'post')).status, 'ready');
     assert.equal(await assets.countDocuments({ ownerId, state: 'ready' }), 20);
+  });
+
+  await t.test('notifications cover follows, private requests and approvals with recipient-bound unread state', async () => {
+    const follower = await register('notice_follower', 'Notification Follower');
+    const fromFollower = async (recipient) => (await notifications.list(recipient.user, { limit: 20 })).items
+      .filter(({ actor }) => actor.id === follower.user.id);
+
+    await Promise.all([network.follow(follower.user, publicMember.user.id), network.follow(follower.user, publicMember.user.id)]);
+    const [follow] = await fromFollower(publicMember);
+    assert.deepEqual((await fromFollower(publicMember)).map(({ type }) => type), ['follow']);
+    assert.equal(follow.readAt, null);
+    await assert.rejects(notifications.markRead(outsider.user, follow.id), fails(404, 'NOT_FOUND'));
+    const beforeRead = (await notifications.unreadCount(publicMember.user)).unreadCount;
+    assert.equal((await notifications.markRead(publicMember.user, follow.id)).unreadCount, beforeRead - 1);
+    assert.equal((await notifications.markRead(publicMember.user, follow.id)).unreadCount, beforeRead - 1);
+    assert.ok((await fromFollower(publicMember))[0].readAt);
+
+    await network.follow(follower.user, owner.user.id);
+    assert.deepEqual((await fromFollower(owner)).map(({ type }) => type), ['follow_request']);
+    await network.rejectRequest(owner.user, follower.user.id);
+    assert.deepEqual(await fromFollower(owner), []);
+    await network.follow(follower.user, owner.user.id);
+    assert.deepEqual((await fromFollower(owner)).map(({ type }) => type), ['follow_request']);
+    await Promise.all([network.acceptRequest(owner.user, follower.user.id), network.acceptRequest(owner.user, follower.user.id)]);
+    assert.deepEqual(await fromFollower(owner), []);
+    const approved = await notifications.list(follower.user);
+    assert.deepEqual(approved.items.map(({ type }) => type), ['follow_approved']);
+    assert.equal(approved.items[0].actor.id, owner.user.id);
+    assert.equal(approved.unreadCount, 1);
+    assert.deepEqual(await notifications.markAllRead(follower.user), { unreadCount: 0 });
+    assert.ok((await notifications.list(follower.user)).items[0].readAt);
+    await network.unfollow(follower.user, owner.user.id);
+  });
+
+  await t.test('private post notifications enforce visibility, suppress previews, and disappear after cleanup', async () => {
+    const follower = await register('notice_reader', 'Notification Reader');
+    const { post: moment } = await publish(owner, 'A private notification caption');
+    const addComment = () => posts.createComment(follower.user, moment.id, { text: 'Private notification comment' }, randomUUID());
+    await assert.rejects(posts.setLike(follower.user, moment.id, true), fails(404, 'NOT_FOUND'));
+    await assert.rejects(addComment(), fails(404, 'NOT_FOUND'));
+    const forMoment = async (recipient) => (await notifications.list(recipient.user, { limit: 20 })).items
+      .filter(({ postId }) => postId === moment.id);
+    assert.deepEqual(await forMoment(owner), []);
+
+    await network.follow(follower.user, owner.user.id);
+    await network.acceptRequest(owner.user, follower.user.id);
+    const key = randomUUID();
+    const text = { text: 'Private notification comment' };
+    await posts.setLike(owner.user, moment.id, true);
+    await posts.createComment(owner.user, moment.id, { text: 'Owner comment' }, randomUUID());
+    await posts.setLike(follower.user, moment.id, true);
+    await posts.setLike(follower.user, moment.id, true);
+    const { comment } = await posts.createComment(follower.user, moment.id, text, key);
+    await posts.createComment(follower.user, moment.id, text, key);
+    const received = await forMoment(owner);
+    assert.deepEqual(received.map(({ type }) => type).sort(), ['post_comment', 'post_like']);
+    assert.ok(received.every(({ actor }) => actor.id === follower.user.id));
+    const firstPage = await notifications.list(owner.user, { limit: 1 });
+    assert.ok(firstPage.nextCursor);
+    const secondPage = await notifications.list(owner.user, { limit: 1, cursor: firstPage.nextCursor });
+    assert.notEqual(firstPage.items[0].id, secondPage.items[0].id);
+    await assert.rejects(notifications.list(outsider.user, { cursor: firstPage.nextCursor }), fails(400, 'INVALID_CURSOR'));
+    for (const item of received) {
+      assert.equal(JSON.stringify(item).includes('Private notification comment'), false);
+      assert.equal(JSON.stringify(item).includes('A private notification caption'), false);
+      assert.equal('media' in item, false);
+    }
+    assert.deepEqual(await forMoment(outsider), []);
+
+    // Exercise the read-side guard independently of today's owner-only event writers.
+    const notify = createNotificationWriter(connection.db);
+    await connection.transaction((session) => notify({ type: 'post_like', actorId: objectId(owner.user.id),
+      recipientId: objectId(follower.user.id), postId: objectId(moment.id), createdAt: now() }, session));
+    const [seeded] = await forMoment(follower);
+    assert.ok(seeded);
+    const countBeforeRevocation = (await notifications.unreadCount(follower.user)).unreadCount;
+    await network.removeFollower(owner.user, follower.user.id);
+    assert.deepEqual(await forMoment(follower), []);
+    assert.ok((await notifications.unreadCount(follower.user)).unreadCount < countBeforeRevocation);
+    await assert.rejects(notifications.markRead(follower.user, seeded.id), fails(404, 'NOT_FOUND'));
+    await assert.rejects(addComment(), fails(404, 'NOT_FOUND'));
+
+    await network.follow(follower.user, owner.user.id);
+    await network.acceptRequest(owner.user, follower.user.id);
+    await posts.deleteComment(follower.user, moment.id, comment.id);
+    assert.deepEqual((await forMoment(owner)).map(({ type }) => type), ['post_like']);
+    await posts.setLike(follower.user, moment.id, false);
+    assert.deepEqual(await forMoment(owner), []);
+    await posts.setLike(follower.user, moment.id, true);
+    assert.deepEqual((await forMoment(owner)).map(({ type }) => type), ['post_like']);
+    await posts.deletePost(owner.user, moment.id);
+    assert.deepEqual(await forMoment(owner), []);
+    assert.deepEqual(await forMoment(follower), []);
   });
 
   await t.test('inactive users cannot be followed, searched or read through profiles and photo URLs', async () => {

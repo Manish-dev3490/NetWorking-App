@@ -19,6 +19,7 @@ function accountState(user) {
   const userRef = { current: user };
   const updates = [];
   const notices = [];
+  const badges = [];
   const posts = { revision: 0 };
   const context = {
     AbortController,
@@ -28,6 +29,7 @@ function accountState(user) {
     refreshRef: { current: null },
     apiRequest: async () => pendingRead,
     setUser: (account) => updates.push(account),
+    setNotificationBadge: (badge) => badges.push(badge),
     clearCsrfToken() {},
     setLoading() {},
     setRestoreError() {},
@@ -40,7 +42,7 @@ function accountState(user) {
   const actions = runInNewContext(
     `${accountFunctions}\n${profileSavedFunction}\n({ reconcileAccount, profileSaved });`, context,
   );
-  return { ...actions, userRef, updates, notices, completeRead, posts };
+  return { ...actions, userRef, updates, notices, badges, completeRead, posts };
 }
 
 test('an older same-account refresh cannot overwrite a completed profile save', async () => {
@@ -78,5 +80,6 @@ test('a pending refresh still applies a different account after a profile save',
 
   assert.deepEqual(state.userRef.current, switched);
   assert.deepEqual(state.updates, [saved, switched]);
+  assert.deepEqual(state.badges, [null]);
   assert.ok(state.notices.some((message) => message.includes('changed in another tab')));
 });

@@ -6,6 +6,7 @@ export function readConfig(env = process.env) {
   const nodeEnv = env.NODE_ENV ?? 'development';
   const portValue = env.PORT ?? '3000';
   const host = env.HOST ?? '127.0.0.1';
+  const proxyHops = env.TRUST_PROXY_HOPS ?? '0';
   const mongoUri = env.MONGODB_URI?.trim();
   const authSecret = env.AUTH_SECRET?.trim();
   let appOrigin;
@@ -20,6 +21,9 @@ export function readConfig(env = process.env) {
 
   if (!host.trim()) {
     errors.push('HOST must not be empty.');
+  }
+  if (!/^\d+$/.test(proxyHops) || !Number.isSafeInteger(Number(proxyHops))) {
+    errors.push('TRUST_PROXY_HOPS must be a nonnegative integer.');
   }
 
   if (!mongoUri) {
@@ -46,7 +50,7 @@ export function readConfig(env = process.env) {
     throw new Error(`Invalid backend configuration:\n${errors.join('\n')}`);
   }
 
-  return Object.freeze({ nodeEnv, host: host.trim(), port: Number(portValue), mongoUri, authSecret, appOrigin });
+  return Object.freeze({ nodeEnv, host: host.trim(), port: Number(portValue), trustProxyHops: Number(proxyHops), mongoUri, authSecret, appOrigin });
 }
 
 export function loadConfig() {

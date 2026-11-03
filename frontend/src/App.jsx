@@ -11,11 +11,12 @@ import SavedPage from './features/posts/SavedPage.jsx';
 import MemberSearch from './features/network/MemberSearch.jsx';
 import MemberProfile from './features/network/MemberProfile.jsx';
 import FollowRequests from './features/network/FollowRequests.jsx';
+import NotificationsPage from './features/notifications/NotificationsPage.jsx';
 import { EditPost } from './features/posts/RealPostCard.jsx';
 import { PostEditorContext } from './features/posts/PostEditorContext.js';
 
 function isMemberRoute(pathname) {
-  return ['/profile', '/members', '/requests', '/saved'].includes(pathname) || /^\/(?:p|u)\/[0-9a-f]{24}$/i.test(pathname);
+  return ['/profile', '/members', '/requests', '/saved', '/notifications'].includes(pathname) || /^\/(?:p|u)\/[0-9a-f]{24}$/i.test(pathname);
 }
 
 export default function App() {
@@ -29,6 +30,8 @@ export default function App() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [composerAccountId, setComposerAccountId] = useState(null);
   const [postRevision, setPostRevision] = useState(0);
+  const [notificationRevision, setNotificationRevision] = useState(0);
+  const [notificationBadge, setNotificationBadge] = useState(null);
   const [postEditor, setPostEditor] = useState(null);
   const returnToRef = useRef(isMemberRoute(window.location.pathname) ? window.location.pathname : '/');
   const userRef = useRef(user);
@@ -43,6 +46,7 @@ export default function App() {
   loggingOutRef.current = loggingOut;
 
   function updateAccount(account) {
+    if (userRef.current?.id !== account?.id) setNotificationBadge(null);
     userRef.current = account;
     setUser(account);
   }
@@ -101,7 +105,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    const pageName = user ? (path === '/profile' ? 'Your profile' : path.startsWith('/u/') ? 'Member profile' : path === '/members' ? 'Find members' : path === '/requests' ? 'Follow requests' : path === '/saved' ? 'Saved posts' : path.startsWith('/p/') ? 'A Gather moment' : 'Everyday moments') : (path === '/signup' ? 'Create account' : 'Log in');
+    const pageName = user ? (path === '/profile' ? 'Your profile' : path.startsWith('/u/') ? 'Member profile' : path === '/members' ? 'Find members' : path === '/requests' ? 'Follow requests' : path === '/saved' ? 'Saved posts' : path === '/notifications' ? 'Notifications' : path.startsWith('/p/') ? 'A Gather moment' : 'Everyday moments') : (path === '/signup' ? 'Create account' : 'Log in');
     document.title = `${pageName} — Gather`;
   }, [path, user]);
 
@@ -209,24 +213,42 @@ export default function App() {
 
   const postId = /^\/p\/([0-9a-f]{24})$/i.exec(path)?.[1].toLowerCase();
   const memberMatch = /^\/u\/([0-9a-f]{24})$/i.exec(path);
-  const openPost = (id) => navigate(`/p/${id}`, { keepHash: false, state: path === '/saved' ? { returnTo: '/saved' } : {} });
-  const openProfile = (id) => navigate(`/u/${id}`, { keepHash: false });
+  const fromNotifications = path === '/notifications' ? { returnTo: path } : {};
+  const returnTo = window.history.state?.returnTo;
+  const openPost = (id) => navigate(`/p/${id}`, { keepHash: false, state: path === '/saved' ? { returnTo: path } : fromNotifications });
+  const openProfile = (id) => navigate(`/u/${id}`, { keepHash: false, state: fromNotifications });
   const openSaved = () => navigate('/saved', { keepHash: false });
+  const openNotifications = () => {
+    setNotificationRevision((value) => value + 1);
+    navigate('/notifications', { keepHash: false });
+  };
   const findMembers = () => navigate('/members', { keepHash: false });
-  const followRequests = () => navigate('/requests', { keepHash: false });
+  const followRequests = () => navigate('/requests', { keepHash: false, state: fromNotifications });
   const createPost = () => setComposerAccountId(user.id);
   const postsChanged = () => setPostRevision((value) => value + 1);
-  const networkProps = { user, revision: postRevision, onBack: () => navigate('/'), onFind: findMembers, onRequests: followRequests, onOpenProfile: openProfile, onChanged: postsChanged };
+  const notificationsChanged = (accountId) => {
+    if (userRef.current?.id === accountId) setNotificationRevision((value) => value + 1);
+  };
+  const inboxRevision = postRevision + notificationRevision;
+  const notificationUnreadCount = notificationBadge?.accountId === user.id && notificationBadge.revision === inboxRevision
+    ? notificationBadge.unreadCount : undefined;
+  const reportUnreadCount = (accountId, unreadCount) => {
+    if (userRef.current?.id !== accountId) return;
+    setNotificationBadge((previous) => previous?.accountId === accountId && previous.revision > inboxRevision
+      ? previous : { accountId, revision: inboxRevision, unreadCount });
+  };
+  const networkProps = { user, revision: postRevision, onBack: returnTo === '/notifications' ? openNotifications : () => navigate('/'), backLabel: returnTo === '/notifications' ? 'Notifications' : undefined, onFind: findMembers, onRequests: followRequests, onOpenProfile: openProfile, onChanged: postsChanged };
 
   return <PostEditorContext.Provider value={openPostEditor}>
     {accountError && <div className="account-feedback" role="alert"><span>{accountError}</span><button className="icon-button" type="button" aria-label="Dismiss account message" onClick={() => setAccountError('')}><Icon name="close" size={17} /></button></div>}
-    <div hidden={isMemberRoute(path)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onOpenSaved={openSaved} onFindMembers={findMembers} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} /></div>
+    <div hidden={isMemberRoute(path)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onOpenSaved={openSaved} onOpenNotifications={openNotifications} onFindMembers={findMembers} onRequests={followRequests} postRevision={postRevision} notificationRevision={notificationRevision} notificationUnreadCount={notificationUnreadCount} onPostChanged={postsChanged} /></div>
     {path === '/profile' && <ProfilePage key={user.id} user={user} onSaved={profileSaved} onBack={() => navigate('/')} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} />}
     {path === '/members' && <MemberSearch key={user.id} {...networkProps} />}
     {path === '/requests' && <FollowRequests key={user.id} {...networkProps} />}
     {path === '/saved' && <SavedPage key={user.id} user={user} revision={postRevision} onBack={() => navigate('/', { keepHash: false })} onChanged={postsChanged} onOpenPost={openPost} onOpenProfile={openProfile} />}
+    {path === '/notifications' && <NotificationsPage key={user.id} user={user} revision={inboxRevision} onBack={() => navigate('/', { keepHash: false })} onRead={notificationsChanged} onUnreadCount={reportUnreadCount} onOpenPost={openPost} onOpenProfile={openProfile} onRequests={followRequests} />}
     {memberMatch && <MemberProfile key={`${user.id}:${memberMatch[1]}`} {...networkProps} memberId={memberMatch[1]} onEdit={() => navigate('/profile', { keepHash: false })} onOpenPost={openPost} onCreate={createPost} />}
-    {postId && <PostDetail key={`${user.id}:${postId}`} postId={postId} user={user} backToSaved={window.history.state?.returnTo === '/saved'} onBack={() => navigate(window.history.state?.returnTo === '/saved' ? '/saved' : '/', { keepHash: false })} onChanged={postsChanged} onOpenProfile={openProfile} revision={postRevision} />}
+    {postId && <PostDetail key={`${user.id}:${postId}`} postId={postId} user={user} backToSaved={returnTo === '/saved'} backToNotifications={returnTo === '/notifications'} onBack={() => navigate(returnTo === '/saved' || returnTo === '/notifications' ? returnTo : '/', { keepHash: false })} onChanged={postsChanged} onOpenProfile={openProfile} revision={postRevision} />}
     {composerAccountId === user.id && <PostComposer key={user.id} user={user} onClose={() => { setComposerAccountId(null); postsChanged(); }} onPublished={(post) => { setComposerAccountId(null); postsChanged(); openPost(post.id); }} />}
     {postEditor?.accountId === user.id && <EditPost key={`${postEditor.accountId}:${postEditor.post.id}`} post={postEditor.post} user={user} onClose={() => setPostEditor(null)} onChanged={postsChanged} />}
   </PostEditorContext.Provider>;

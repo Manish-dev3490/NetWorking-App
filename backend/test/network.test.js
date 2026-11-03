@@ -40,6 +40,15 @@ async function serve(t, { active = true } = {}) {
       return { id: assetId, status: 'ready', contentUrl: `/api/v1/media/${assetId}/content`, width: input.width, height: input.height, sizeBytes: input.data.length };
     },
   };
+  const notificationService = {
+    async list(viewer, query) {
+      calls.push(['listNotifications', viewer.id, query]);
+      return { ...page([{ id: assetId, type: 'follow', actor: summary, readAt: null }]), unreadCount: 2 };
+    },
+    async unreadCount(viewer) { calls.push(['unreadNotifications', viewer.id]); return { unreadCount: 2 }; },
+    async markRead(viewer, id) { calls.push(['readNotification', viewer.id, id]); return { unreadCount: 1 }; },
+    async markAllRead(viewer) { calls.push(['readAllNotifications', viewer.id]); return { unreadCount: 0 }; },
+  };
   const authService = {
     async resolveSession(value) {
       if (value !== token) throw new HttpError(401, 'AUTH_REQUIRED', 'Sign in to continue.');
@@ -47,7 +56,7 @@ async function serve(t, { active = true } = {}) {
     },
   };
   const server = createServer(createApp({
-    database: { isAvailable: async () => true }, authService, postService, networkService,
+    database: { isAvailable: async () => true }, authService, postService, networkService, notificationService,
     config: { nodeEnv: 'test', appOrigin: origin, authSecret: 'd'.repeat(64) },
   }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -86,6 +95,37 @@ async function expectError(response, status, code) {
   assert.equal(payload.error.stack, undefined);
   assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
 }
+
+test('notification reads bind the account and mark-as-read writes enforce CSRF', async (t) => {
+  const client = await serve(t);
+  const account = { 'X-Account-Id': member.id };
+  const list = '/notifications?limit=2&cursor=next';
+  const single = `/notifications/${assetId}/read`;
+  await expectError(await client.request(list, { anonymous: true, headers: account }), 401, 'AUTH_REQUIRED');
+  await expectError(await client.request(list, { headers: { 'X-Account-Id': targetId } }), 409, 'ACCOUNT_CHANGED');
+  await expectError(await client.request('/notifications/unread-count'), 409, 'ACCOUNT_CHANGED');
+  await expectError(await client.request(single, { method: 'PATCH', body: {}, headers: account }), 403, 'CSRF_REJECTED');
+  assert.deepEqual(client.calls, []);
+
+  const response = await client.request(list, { headers: account });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.data[0].type, 'follow');
+  assert.equal(payload.meta.unreadCount, 2);
+  assert.equal(payload.meta.nextCursor, 'next-network-page');
+  const badge = await client.request('/notifications/unread-count', { headers: account });
+  assert.deepEqual((await badge.json()).data, { unreadCount: 2 });
+  const headers = await client.mutationHeaders();
+  const read = await client.request(single, { method: 'PATCH', headers });
+  assert.deepEqual((await read.json()).data, { unreadCount: 1 });
+  const all = await client.request('/notifications/read-all', { method: 'PATCH', headers });
+  assert.deepEqual((await all.json()).data, { unreadCount: 0 });
+  assert.equal(client.calls[0][1], member.id);
+  assert.equal(Number(client.calls[0][2].limit), 2);
+  assert.deepEqual(client.calls.slice(1), [
+    ['unreadNotifications', member.id], ['readNotification', member.id, assetId], ['readAllNotifications', member.id],
+  ]);
+});
 
 test('member profiles, search and relationship lists are authenticated paginated routes', async (t) => {
   const client = await serve(t);

@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { access } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { createDatabase } from './config/database.js';
 import { loadConfig } from './config/env.js';
@@ -10,6 +12,8 @@ import { assertNetworkMigration } from './migrations/003-network.js';
 import { assertEngagementMigration } from './migrations/004-engagement.js';
 import { assertSavedPostsMigration } from './migrations/005-saved-posts.js';
 import { createNetworkService } from './modules/network/service.js';
+import { assertNotificationsMigration } from './migrations/006-notifications.js';
+import { createNotificationService } from './modules/notifications/service.js';
 
 const database = createDatabase();
 let server;
@@ -74,6 +78,12 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 async function start() {
   const config = loadConfig();
+  let frontendDirectory;
+  if (config.nodeEnv === 'production') {
+    stage = 'frontend';
+    await access(new URL('../../frontend/dist/index.html', import.meta.url));
+    frontendDirectory = fileURLToPath(new URL('../../frontend/dist/', import.meta.url));
+  }
   stage = 'database';
   await database.connect(config.mongoUri);
   if (!stopping) {
@@ -88,6 +98,9 @@ async function start() {
     stage = 'network';
     await assertNetworkMigration(database.connection);
     const networkService = createNetworkService({ connection: database.connection, cursorSecret: config.authSecret });
+    stage = 'notifications';
+    await assertNotificationsMigration(database.connection);
+    const notificationService = createNotificationService({ connection: database.connection, cursorSecret: config.authSecret });
     await postService.cleanupOrphans();
     if (stopping) return;
     orphanTimer = setInterval(() => {
@@ -98,7 +111,7 @@ async function start() {
     }, 60_000);
     orphanTimer.unref();
     stage = 'http';
-    server = createServer(createApp({ database, authService, postService, networkService, config }));
+    server = createServer(createApp({ database, authService, postService, networkService, notificationService, config, frontendDirectory }));
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(config.port, config.host, () => {
@@ -123,10 +136,12 @@ try {
 } catch (error) {
   const messages = {
     configuration: error.message,
+    frontend: 'Production frontend build is missing or unreadable. Run npm run build before starting.',
     database: 'MongoDB connection failed. Check MONGODB_URI, database availability, credentials, and network access.',
     authentication: 'Authentication initialization failed. Check the auth database migration.',
     posts: 'Post initialization failed. Run the database migrations and check MongoDB permissions.',
     network: 'Member network initialization failed. Run the database migrations and check MongoDB permissions.',
+    notifications: 'Notification initialization failed. Run the database migrations and check MongoDB permissions.',
     http: 'HTTP startup failed. Check HOST, PORT, and whether the port is already in use.',
   };
   console.error(`Startup failed: ${messages[stage]}`);

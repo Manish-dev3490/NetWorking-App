@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { HttpError } from '../../shared/http-error.js';
 import { lockMembers } from '../../shared/lock-members.js';
+import { createNotificationWriter } from '../notifications/writer.js';
 import { createNetworkCursors } from './cursor.js';
 import { invalid, memberId, pageQuery } from './validation.js';
 
@@ -21,6 +22,7 @@ export function createNetworkService({ connection, now = () => new Date(), curso
   const follows = connection.db.collection('follows');
   const posts = connection.db.collection('posts');
   const cursors = createNetworkCursors(cursorSecret, now);
+  const notify = createNotificationWriter(connection.db);
 
   async function active(viewer, session) {
     if (!viewer || viewer.status !== 'active') throw restricted();
@@ -168,7 +170,13 @@ export function createNetworkService({ connection, now = () => new Date(), curso
         if (existing) return { userId: target._id.toHexString(), status: existing.status };
         const date = now();
         const status = target.visibility === 'private' ? 'pending' : 'accepted';
-        await follows.insertOne({ ...pair, status, createdAt: date, ...(status === 'accepted' ? { acceptedAt: date } : {}) }, { session });
+        const { insertedId } = await follows.insertOne({
+          ...pair, status, createdAt: date, ...(status === 'accepted' ? { acceptedAt: date } : {}),
+        }, { session });
+        await notify({
+          type: status === 'pending' ? 'follow_request' : 'follow',
+          actorId: actor._id, recipientId: target._id, relationshipId: insertedId, createdAt: date,
+        }, session);
         return { userId: target._id.toHexString(), status };
       });
     },
@@ -184,8 +192,14 @@ export function createNetworkService({ connection, now = () => new Date(), curso
         const pair = { followerId: target._id, followingId: actor._id };
         const request = await follows.findOne(pair, { session });
         if (!request) throw notFound();
-        if (request.status === 'pending') await follows.updateOne({ ...pair, status: 'pending' },
-          { $set: { status: 'accepted', acceptedAt: now() } }, { session });
+        if (request.status === 'pending') {
+          const date = now();
+          await follows.updateOne({ ...pair, status: 'pending' }, { $set: { status: 'accepted', acceptedAt: date } }, { session });
+          await notify({
+            type: 'follow_approved', actorId: actor._id, recipientId: target._id,
+            relationshipId: request._id, createdAt: date,
+          }, session);
+        }
         return { userId: target._id.toHexString(), status: 'accepted' };
       });
     },

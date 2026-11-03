@@ -19,10 +19,12 @@ const detailSource = await readFile(new URL('../../frontend/src/features/posts/P
 const reactionsSource = await readFile(new URL('../../frontend/src/features/posts/PostReactions.jsx', import.meta.url), 'utf8');
 const commentsSource = await readFile(new URL('../../frontend/src/features/posts/PostComments.jsx', import.meta.url), 'utf8');
 const feedSource = await readFile(new URL('../../frontend/src/features/posts/PostFeed.jsx', import.meta.url), 'utf8');
+const inboxSource = await readFile(new URL('../../frontend/src/features/notifications/NotificationsPage.jsx', import.meta.url), 'utf8');
+const homeSource = await readFile(new URL('../../frontend/src/pages/HomePage.jsx', import.meta.url), 'utf8');
 const engagementSource = await readFile(new URL('../../frontend/src/features/posts/post-engagement.js', import.meta.url), 'utf8');
 const providerType = 'PostEditorProvider';
 const componentTypes = ['HomePage', 'AuthPage', 'ProfilePage', 'Icon', 'PostComposer', 'PostDetail',
-  'MemberSearch', 'MemberProfile', 'FollowRequests', 'EditPost', 'Avatar', 'RealPostCard', 'PostComments', 'SavedPage', 'PostFeed'];
+  'MemberSearch', 'MemberProfile', 'FollowRequests', 'EditPost', 'Avatar', 'RealPostCard', 'PostComments', 'SavedPage', 'PostFeed', 'NotificationsPage'];
 
 function nodes(tree) {
   if (!tree || typeof tree !== 'object') return [];
@@ -134,6 +136,196 @@ test('Saved opens from Home and rechecks its posts on tab focus', async () => {
   input(app.render(), 'SavedPage').props.onBack();
   assert.equal(input(app.render(), 'SavedPage'), undefined);
   app.unmount();
+});
+
+test('Notifications opens from Home and refreshes for the signed-in account on focus', async () => {
+  const app = await application();
+  input(app.render(), 'HomePage').props.onOpenNotifications();
+  const inbox = input(app.render(), 'NotificationsPage');
+  assert.ok(inbox);
+  assert.equal(inbox.props.user.id, account.id);
+  app.browser.dispatchEvent(new Event('focus')); await setImmediate();
+  const focused = input(app.render(), 'NotificationsPage');
+  assert.equal(focused.props.revision, inbox.props.revision + 1);
+  focused.props.onBack();
+  assert.equal(input(app.render(), 'NotificationsPage'), undefined);
+  app.unmount();
+});
+
+test('notification rows mark individually, open the Requests page, and clear the unread count', async () => {
+  const items = ['follow_request', 'post_comment', 'post_like'].map((type, index) => ({
+    id: `event-${index}`, type, actor: account, createdAt: '2026-01-01T12:00:00.000Z', readAt: null,
+    postId: index ? post.id : null,
+  }));
+  const calls = [];
+  const badgeRefreshes = [];
+  let requestVisits = 0;
+  let unread = items.length;
+  const view = renderer(inboxSource, 'NotificationsPage', {
+    URLSearchParams, formatPostDate: () => 'now',
+    async apiRequest(path, options) {
+      assert.equal(options.accountId, account.id);
+      calls.push(path);
+      if (path.startsWith('notifications?')) return { data: items, meta: { unreadCount: unread } };
+      assert.equal(options.method, 'PATCH');
+      for (const item of items) {
+        if (path.endsWith('/read-all') || path === `notifications/${item.id}/read`) item.readAt = item.createdAt;
+      }
+      unread = items.filter((item) => !item.readAt).length;
+      return { data: { unreadCount: unread } };
+    },
+  });
+  const props = {
+    user: account, revision: 0, onUnreadCount() {}, onRead(id) { badgeRefreshes.push(id); props.revision += 1; },
+    onRequests: () => { requestVisits += 1; },
+  };
+  const tree = () => nodes(view.render(props));
+  const row = (id) => tree().find((node) => node.type === 'li' && node.props.key === id);
+  const button = (label) => tree().find((node) => node.type === 'button' && node.children.includes(label));
+  const refresh = async () => { view.render(props); view.flushEffects(); await setImmediate(); };
+  await refresh();
+  assert.equal(tree().find((node) => node.props['aria-live'] === 'polite').children[0], '3 unread');
+  await nodes(row('event-1')).find((node) => node.children.includes('Mark as read')).props.onClick();
+  await refresh();
+  assert.doesNotMatch(row('event-1').props.className, /is-unread/);
+  await nodes(row('event-0')).find((node) => node.props.className === 'notification-open').props.onClick();
+  assert.equal(requestVisits, 1);
+  await refresh();
+  await button('Mark all as read').props.onClick();
+  await refresh();
+  assert.equal(tree().find((node) => node.props['aria-live'] === 'polite').children[0], '0 unread');
+  assert.equal(button('Mark all as read').props.disabled, true);
+  assert.deepEqual(calls.filter((path) => !path.includes('?')), ['notifications/event-1/read', 'notifications/event-0/read', 'notifications/read-all']);
+  assert.deepEqual(badgeRefreshes, [account.id, account.id, account.id]);
+  view.unmount();
+});
+
+test('desktop and mobile notification badges refresh after reads and ignore stale counts', async () => {
+  const requests = [];
+  const home = renderer(homeSource, 'HomePage', {
+    apiRequest(path, options) {
+      assert.equal(path, 'notifications/unread-count');
+      assert.equal(options.accountId, account.id);
+      return new Promise((resolve) => requests.push({ resolve, signal: options.signal }));
+    },
+  });
+  const props = { user: account, postRevision: 0, notificationRevision: 0 };
+  const labels = () => nodes(home.render(props)).filter((node) => node.type === 'button' && node.props['aria-label']?.startsWith('Notifications'))
+    .map((node) => node.props['aria-label']);
+  home.render(props); home.flushEffects();
+  requests[0].resolve({ data: { unreadCount: 2 } }); await setImmediate();
+  assert.deepEqual(labels(), ['Notifications, 2 unread', 'Notifications, 2 unread']);
+  props.postRevision += 1;
+  home.render(props); home.flushEffects();
+  props.notificationRevision += 1;
+  home.render(props); home.flushEffects();
+  assert.equal(requests[1].signal.aborted, true);
+  requests[2].resolve({ data: { unreadCount: 0 } }); await setImmediate();
+  requests[1].resolve({ data: { unreadCount: 5 } }); await setImmediate();
+  assert.deepEqual(labels(), ['Notifications', 'Notifications']);
+  home.unmount();
+});
+
+function notification(id, readAt = null) {
+  return { id, type: 'post_like', actor: account, postId: post.id, createdAt: '2026-01-01T12:00:00.000Z', readAt };
+}
+
+function notificationPage(rows, unreadCount, nextCursor = null) {
+  return { data: rows, meta: { unreadCount, hasMore: Boolean(nextCursor), nextCursor } };
+}
+
+test('Mark all reloads the latest rows and count after an overlapping tab refresh', async () => {
+  const app = await application('/notifications');
+  let complete;
+  let rows = [notification('old')];
+  const view = renderer(inboxSource, 'NotificationsPage', {
+    URLSearchParams, formatPostDate: () => 'now',
+    apiRequest(path, options) {
+      assert.equal(options.accountId, account.id);
+      if (path === 'notifications/read-all') return new Promise((resolve) => { complete = resolve; });
+      return Promise.resolve(notificationPage(rows, rows.filter((row) => !row.readAt).length));
+    },
+  });
+  const render = () => view.render(input(app.render(), 'NotificationsPage').props);
+  const refresh = async () => { render(); view.flushEffects(); await setImmediate(); };
+  await refresh();
+  const markAll = nodes(render()).find((node) => node.children.includes('Mark all as read'));
+  const marking = markAll.props.onClick();
+  rows = [notification('new'), ...rows];
+  app.browser.dispatchEvent(new Event('focus')); await setImmediate(); await refresh();
+  assert.equal(nodes(render()).filter((node) => node.type === 'li' && /is-unread/.test(node.props.className)).length, 2);
+
+  rows = rows.map(({ id }) => notification(id, '2026-01-01T12:01:00.000Z'));
+  complete({ data: { unreadCount: 0 } }); await marking; await refresh();
+  const updated = nodes(render());
+  assert.equal(updated.find((node) => node.props['aria-live'] === 'polite').children[0], '0 unread');
+  assert.equal(updated.filter((node) => node.type === 'li').length, 2);
+  assert.ok(updated.filter((node) => node.type === 'li').every((node) => !/is-unread/.test(node.props.className)));
+  view.unmount(); app.unmount();
+});
+
+test('a late mark-as-read 404 revalidates the reopened inbox without navigating away', async () => {
+  const app = await application('/notifications');
+  let fail;
+  let rows = [notification('unavailable')];
+  const globals = {
+    URLSearchParams, formatPostDate: () => 'now',
+    apiRequest(path) {
+      if (path === 'notifications/unavailable/read') return new Promise((resolve, reject) => { fail = reject; });
+      return Promise.resolve(notificationPage(rows, rows.length));
+    },
+  };
+  const props = () => input(app.render(), 'NotificationsPage').props;
+  const original = renderer(inboxSource, 'NotificationsPage', globals);
+  original.render(props()); original.flushEffects(); await setImmediate();
+  const marking = nodes(original.render(props())).find((node) => node.props.className === 'notification-open').props.onClick();
+  props().onBack(); original.unmount();
+  input(app.render(), 'HomePage').props.onOpenNotifications();
+  const replacement = renderer(inboxSource, 'NotificationsPage', globals);
+  replacement.render(props()); replacement.flushEffects(); await setImmediate();
+  assert.ok(input(replacement.render(props()), 'li'));
+
+  rows = [];
+  fail(Object.assign(new Error('Unavailable'), { status: 404 })); await marking;
+  assert.equal(input(replacement.render(props()), 'li'), undefined);
+  replacement.flushEffects(); await setImmediate();
+  assert.equal(input(replacement.render(props()), 'li'), undefined);
+  assert.equal(input(app.render(), 'PostDetail'), undefined);
+  replacement.unmount(); app.unmount();
+});
+
+test('Load more publishes the fresh inbox count to Home and supersedes its pending badge read', async () => {
+  const app = await application('/notifications');
+  const props = () => input(app.render(), 'NotificationsPage').props;
+  let deleted = false;
+  const inbox = renderer(inboxSource, 'NotificationsPage', {
+    URLSearchParams, formatPostDate: () => 'now',
+    async apiRequest(path) {
+      if (path.includes('cursor=')) return notificationPage([notification('second')], 1);
+      return notificationPage(deleted ? [] : [notification('deleted')], deleted ? 1 : 2, 'next');
+    },
+  });
+  inbox.render(props()); inbox.flushEffects(); await setImmediate();
+  let finishBadge;
+  let badgeSignal;
+  const home = renderer(homeSource, 'HomePage', {
+    apiRequest: (path, options) => new Promise((resolve) => { finishBadge = resolve; badgeSignal = options.signal; }),
+  });
+  const homeProps = () => input(app.render(), 'HomePage').props;
+  // A badge request started before the authoritative inbox count arrived.
+  home.render({ ...homeProps(), notificationUnreadCount: undefined }); home.flushEffects();
+  deleted = true;
+  const more = nodes(inbox.render(props())).find((node) => node.children.includes('Load more notifications'));
+  await more.props.onClick();
+  assert.equal(input(inbox.render(props()), 'li').props.key, 'second');
+  props().onBack(); inbox.unmount();
+  home.render(homeProps()); home.flushEffects();
+  assert.equal(badgeSignal.aborted, true);
+  finishBadge({ data: { unreadCount: 2 } }); await setImmediate();
+  const labels = nodes(home.render(homeProps())).filter((node) => node.type === 'button' && node.props['aria-label']?.startsWith('Notifications'))
+    .map((node) => node.props['aria-label']);
+  assert.deepEqual(labels, ['Notifications, 1 unread', 'Notifications, 1 unread']);
+  home.unmount(); app.unmount();
 });
 
 test('a completed unsave removes its card from Saved even if the request started before navigation', async () => {

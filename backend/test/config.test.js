@@ -13,7 +13,7 @@ test('configuration applies local defaults without mutating its input', () => {
   const input = { MONGODB_URI: mongoUri, AUTH_SECRET: authSecret };
   const config = readConfig(input);
   assert.deepEqual(config, {
-    nodeEnv: 'development', host: '127.0.0.1', port: 3000, mongoUri,
+    nodeEnv: 'development', host: '127.0.0.1', port: 3000, trustProxyHops: 0, mongoUri,
     authSecret, appOrigin: 'http://localhost:5173',
   });
   assert.deepEqual(input, { MONGODB_URI: mongoUri, AUTH_SECRET: authSecret });
@@ -26,12 +26,19 @@ test('configuration accepts explicit production settings', () => {
     NODE_ENV: 'production',
     HOST: '0.0.0.0',
     PORT: '8080',
+    TRUST_PROXY_HOPS: '1',
     AUTH_SECRET: authSecret,
     APP_ORIGIN: 'https://gather.example',
   }), {
-    nodeEnv: 'production', host: '0.0.0.0', port: 8080, mongoUri,
+    nodeEnv: 'production', host: '0.0.0.0', port: 8080, trustProxyHops: 1, mongoUri,
     authSecret, appOrigin: 'https://gather.example',
   });
+});
+
+test('proxy trust requires a nonnegative integer', () => {
+  for (const value of ['', 'true', '-1', '1.5', '9007199254740992']) {
+    assert.throws(() => readConfig({ MONGODB_URI: mongoUri, AUTH_SECRET: authSecret, TRUST_PROXY_HOPS: value }), /TRUST_PROXY_HOPS must/);
+  }
 });
 
 test('authentication configuration requires a persistent random secret', () => {

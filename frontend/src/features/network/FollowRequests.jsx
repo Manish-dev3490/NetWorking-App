@@ -5,7 +5,7 @@ import { apiRequest } from '../../services/api.js';
 import { describeError } from '../auth/form-utils.js';
 import NetworkPage from './NetworkPage.jsx';
 
-export default function FollowRequests({ user, revision, onBack, onFind, onRequests, onOpenProfile, onChanged }) {
+export default function FollowRequests({ user, revision, onBack, backLabel, onFind, onRequests, onOpenProfile, onChanged }) {
   const [requests, setRequests] = useState([]);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState('');
@@ -57,7 +57,7 @@ export default function FollowRequests({ user, revision, onBack, onFind, onReque
     }
     finally { if (mutationRef.current === controller) mutationRef.current = null; if (!controller.signal.aborted) setChanging(null); }
   }
-  return <NetworkPage title="A little new company." eyebrow="Your follow requests" description="Choose who can see your private moments. You can remove a follower later from your profile." onBack={onBack} onFind={onFind} onRequests={onRequests}>
+  return <NetworkPage title="A little new company." eyebrow="Your follow requests" description="Choose who can see your private moments. You can remove a follower later from your profile." onBack={onBack} backLabel={backLabel} onFind={onFind} onRequests={onRequests}>
     {message && <p className="form-success" role="status"><Icon name="check" size={16} />{message}</p>}
     <section className="network-card request-inbox" aria-label="Incoming follow requests" aria-busy={pending}>
       <h2>Waiting for your approval</h2>

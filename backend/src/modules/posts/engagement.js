@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import mongoose from 'mongoose';
 import { HttpError } from '../../shared/http-error.js';
+import { createNotificationWriter } from '../notifications/writer.js';
 import { objectId, requestKey, validateComment } from './validation.js';
 
 const missingComment = () => new HttpError(404, 'COMMENT_NOT_FOUND', 'Comment not found.');
@@ -25,6 +26,7 @@ export function createEngagement({ db, now, cursors, withVisiblePost }) {
   const likes = db.collection('post_likes');
   const comments = db.collection('post_comments');
   const posts = db.collection('posts');
+  const notify = createNotificationWriter(db);
 
   async function changeCount(postId, field, amount, session) {
     const post = await posts.findOneAndUpdate({ _id: postId, status: 'published' }, { $inc: { [field]: amount } }, {
@@ -46,12 +48,16 @@ export function createEngagement({ db, now, cursors, withVisiblePost }) {
     setLike(viewer, postId, likedByMe) {
       return withVisiblePost(viewer, postId, true, async (post, member, session) => {
         const pair = { postId: post._id, memberId: member._id };
+        const date = now();
         const changed = likedByMe
-          ? (await likes.updateOne(pair, { $setOnInsert: { ...pair, createdAt: now() } }, { session, upsert: true })).upsertedCount
+          ? (await likes.updateOne(pair, { $setOnInsert: { ...pair, createdAt: date } }, { session, upsert: true })).upsertedCount
           : (await likes.deleteOne(pair, { session })).deletedCount;
         const likeCount = changed
           ? await changeCount(post._id, 'likeCount', likedByMe ? 1 : -1, session)
           : post.likeCount ?? 0;
+        if (likedByMe && changed) await notify({
+          type: 'post_like', actorId: member._id, recipientId: post.authorId, postId: post._id, createdAt: date,
+        }, session);
         return { likedByMe, likeCount };
       });
     },
@@ -104,6 +110,10 @@ export function createEngagement({ db, now, cursors, withVisiblePost }) {
           status: 'visible', editVersion: 0, createdAt: date, updatedAt: date };
         await comments.insertOne(comment, { session });
         const commentCount = await changeCount(post._id, 'commentCount', 1, session);
+        await notify({
+          type: 'post_comment', actorId: member._id, recipientId: post.authorId,
+          postId: post._id, commentId: comment._id, createdAt: date,
+        }, session);
         return { comment: commentDto(comment, member, member._id), commentCount, replayed: false };
       });
     },
