@@ -87,6 +87,29 @@ test('a protected response for another identity is rejected instead of being app
   assert.equal(changed, 1);
 });
 
+test('a Saved read stays bound to the displayed account after the session cookie switches', async (t) => {
+  const requestedAccounts = [];
+  let changed = 0;
+  const api = await client(t, async (url, options) => {
+    assert.equal(url, '/api/v1/me/saved-posts?limit=10');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.credentials, 'include');
+    const headers = new Headers(options.headers);
+    assert.equal(headers.has('X-CSRF-Token'), false);
+    const account = headers.get('X-Account-Id');
+    requestedAccounts.push(account);
+    return account === bob
+      ? response(200, { data: [{ id: 'bob-bookmark' }] })
+      : response(409, { error: { code: 'ACCOUNT_CHANGED', message: 'Review the current account.' } });
+  });
+  api.events.addEventListener('gather:account-changed', () => { changed += 1; });
+  await assert.rejects(api.apiRequest('me/saved-posts?limit=10', { accountId: alice }),
+    (error) => error.status === 409 && error.code === 'ACCOUNT_CHANGED');
+  assert.equal(changed, 1);
+  assert.deepEqual((await api.apiRequest('me/saved-posts?limit=10', { accountId: bob })).data, [{ id: 'bob-bookmark' }]);
+  assert.deepEqual(requestedAccounts, [alice, bob]);
+});
+
 test('session-ended events identify the request account so late failures cannot sign out a newer account', async (t) => {
   let requestAccount;
   const api = await client(t, async (url) => url.endsWith('/auth/csrf')

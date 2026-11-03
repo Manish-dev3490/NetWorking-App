@@ -7,6 +7,7 @@ import { migrateAuth } from '../src/migrations/001-auth.js';
 import { migratePosts } from '../src/migrations/002-posts.js';
 import { migrateNetwork } from '../src/migrations/003-network.js';
 import { migrateEngagement } from '../src/migrations/004-engagement.js';
+import { migrateSavedPosts } from '../src/migrations/005-saved-posts.js';
 import { createAuthService } from '../src/modules/auth/service.js';
 import { createNetworkService } from '../src/modules/network/service.js';
 import { createPostService } from '../src/modules/posts/service.js';
@@ -40,6 +41,8 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
   await migrateNetwork(connection);
   await migrateEngagement(connection);
   await migrateEngagement(connection);
+  assert.equal((await migrateSavedPosts(connection)).applied, true);
+  assert.equal((await migrateSavedPosts(connection)).applied, false);
   let currentTime = new Date();
   const now = () => new Date(currentTime);
   const network = createNetworkService({ connection, now, cursorSecret: 'network-integration-cursor-secret' });
@@ -71,6 +74,7 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
   const privatePostId = privateMoment.post.id;
   let privateCommentId;
   let privateCommentCursor;
+  let savedBeforePrivate;
 
   async function assertEngagementHidden() {
     const absentCommentId = privateCommentId ?? new mongoose.Types.ObjectId().toString();
@@ -83,6 +87,13 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
       () => posts.deleteComment(viewer.user, privatePostId, absentCommentId),
     ];
     for (const call of calls) await assert.rejects(call, fails(404, 'NOT_FOUND'));
+  }
+
+  async function assertPrivateBookmarkHidden() {
+    await assert.rejects(posts.setSaved(viewer.user, privatePostId, true), fails(404, 'NOT_FOUND'));
+    await assert.rejects(posts.setSaved(viewer.user, privatePostId, false), fails(404, 'NOT_FOUND'));
+    const page = await posts.listSaved(viewer.user, {});
+    assert.ok(page.items.every(({ id }) => id !== privatePostId));
   }
 
   await t.test('private non-followers receive minimal profiles without biography, counts, posts or photo bytes', async () => {
@@ -100,6 +111,7 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     await assert.rejects(posts.getPost(viewer.user, privateMoment.post.id), fails(404, 'NOT_FOUND'));
     await assert.rejects(posts.getImage(viewer.user, privateMoment.asset.id), fails(404, 'NOT_FOUND'));
     await assertEngagementHidden();
+    await assertPrivateBookmarkHidden();
     const self = await network.getProfile(owner.user, owner.user.id);
     assert.equal(self.canViewContent, true);
     assert.equal(self.isSelf, true);
@@ -121,6 +133,7 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     assert.equal((await network.getProfile(viewer.user, owner.user.id)).relationship.followingStatus, 'pending');
     await assert.rejects(posts.getPost(viewer.user, privateMoment.post.id), fails(404, 'NOT_FOUND'));
     await assertEngagementHidden();
+    await assertPrivateBookmarkHidden();
     await assert.rejects(network.acceptRequest(outsider.user, viewer.user.id), fails(404, 'NOT_FOUND'));
   });
 
@@ -152,6 +165,46 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     assert.equal((await posts.listRecent(viewer.user, { limit: 10 })).items.some((post) => post.id === privateMoment.post.id), false);
     const outsiderFeed = await posts.listFollowing(outsider.user, { limit: 10 });
     assert.deepEqual(outsiderFeed.items.map((post) => post.id), [unrelatedMoment.post.id]);
+  });
+
+  await t.test('Saved is private to the member and paginates newest bookmarks first with retry-safe saves', async () => {
+    const ownId = ownMoment.post.id;
+    const unrelatedId = unrelatedMoment.post.id;
+    assert.equal((await posts.getPost(viewer.user, privatePostId)).savedByMe, false);
+    assert.deepEqual(await posts.setSaved(viewer.user, ownId, true), { savedByMe: true });
+    currentTime = new Date(currentTime.getTime() + 1000);
+    const retries = await Promise.all([
+      posts.setSaved(viewer.user, privatePostId, true), posts.setSaved(viewer.user, privatePostId, true),
+    ]);
+    assert.deepEqual(retries, [{ savedByMe: true }, { savedByMe: true }]);
+    currentTime = new Date(currentTime.getTime() + 1000);
+    await posts.setSaved(viewer.user, unrelatedId, true);
+    await posts.setSaved(viewer.user, ownId, true);
+    assert.equal((await posts.getPost(viewer.user, privatePostId)).savedByMe, true);
+    assert.equal((await posts.getPost(owner.user, privatePostId)).savedByMe, false);
+    assert.deepEqual((await posts.listSaved(owner.user, {})).items, []);
+
+    const expected = [unrelatedId, privatePostId, ownId];
+    const found = [];
+    let cursor;
+    for (let index = 0; index < expected.length; index += 1) {
+      const page = await posts.listSaved(viewer.user, { limit: 1, cursor });
+      assert.equal(page.items.length, 1);
+      assert.equal(page.items[0].savedByMe, true);
+      found.push(page.items[0].id);
+      if (index === 0) savedBeforePrivate = page.nextCursor;
+      cursor = page.nextCursor;
+      assert.equal(page.hasMore, index < expected.length - 1);
+    }
+    assert.deepEqual(found, expected);
+    await assert.rejects(posts.listSaved(owner.user, { cursor: savedBeforePrivate }), fails(400, 'INVALID_CURSOR'));
+    await assert.rejects(posts.listFollowing(viewer.user, { cursor: savedBeforePrivate }), fails(400, 'INVALID_CURSOR'));
+    for (const [page, id] of [
+      [await posts.listFollowing(viewer.user, {}), privatePostId],
+      [await posts.listUser(viewer.user, owner.user.id, {}), privatePostId],
+      [await posts.listRecent(viewer.user, {}), unrelatedId],
+      [await posts.listOwn(viewer.user, {}), ownId],
+    ]) assert.equal(page.items.find((post) => post.id === id).savedByMe, true);
   });
 
   await t.test('approved followers can like and unlike a private post with retry-safe counts across post views', async () => {
@@ -246,6 +299,13 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     await assert.rejects(posts.getPost(viewer.user, privateMoment.post.id), fails(404, 'NOT_FOUND'));
     await assert.rejects(posts.getImage(viewer.user, privateMoment.asset.id), fails(404, 'NOT_FOUND'));
     await assertEngagementHidden();
+    await assertPrivateBookmarkHidden();
+    const savedAfterRevoke = await posts.listSaved(viewer.user, { limit: 1, cursor: savedBeforePrivate });
+    assert.deepEqual(savedAfterRevoke.items.map(({ id }) => id), [ownMoment.post.id]);
+    const unsave = () => posts.setSaved(viewer.user, ownMoment.post.id, false);
+    assert.deepEqual(await Promise.all([unsave(), unsave()]), [{ savedByMe: false }, { savedByMe: false }]);
+    assert.equal((await posts.getPost(viewer.user, ownMoment.post.id)).savedByMe, false);
+    assert.deepEqual((await posts.listSaved(viewer.user, {})).items.map(({ id }) => id), [unrelatedMoment.post.id]);
     const ownerView = await posts.getPost(owner.user, privatePostId);
     assert.equal(ownerView.likeCount, 1);
     assert.equal(ownerView.commentCount, 1);
@@ -267,8 +327,10 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     assert.equal((await network.listRequests(owner.user, {})).items.length, 0);
     await network.follow(viewer.user, owner.user.id);
     await network.acceptRequest(owner.user, viewer.user.id);
+    assert.ok((await posts.listSaved(viewer.user, {})).items.some(({ id }) => id === privatePostId));
     await network.unfollow(viewer.user, owner.user.id);
     await assert.rejects(posts.getImage(viewer.user, privateMoment.asset.id), fails(404, 'NOT_FOUND'));
+    await assertPrivateBookmarkHidden();
   });
 
   await t.test('public follows are accepted once, reverse follows are independent and self-follow is rejected', async () => {

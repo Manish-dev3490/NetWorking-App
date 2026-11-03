@@ -7,11 +7,16 @@ import { apiRequest, clearCsrfToken } from './services/api.js';
 import { describeError } from './features/auth/form-utils.js';
 import PostComposer from './features/posts/PostComposer.jsx';
 import PostDetail from './features/posts/PostDetail.jsx';
+import SavedPage from './features/posts/SavedPage.jsx';
 import MemberSearch from './features/network/MemberSearch.jsx';
 import MemberProfile from './features/network/MemberProfile.jsx';
 import FollowRequests from './features/network/FollowRequests.jsx';
 import { EditPost } from './features/posts/RealPostCard.jsx';
 import { PostEditorContext } from './features/posts/PostEditorContext.js';
+
+function isMemberRoute(pathname) {
+  return ['/profile', '/members', '/requests', '/saved'].includes(pathname) || /^\/(?:p|u)\/[0-9a-f]{24}$/i.test(pathname);
+}
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname);
@@ -25,7 +30,7 @@ export default function App() {
   const [composerAccountId, setComposerAccountId] = useState(null);
   const [postRevision, setPostRevision] = useState(0);
   const [postEditor, setPostEditor] = useState(null);
-  const returnToRef = useRef(['/profile', '/members', '/requests'].includes(window.location.pathname) || /^\/(?:p|u)\/[0-9a-f]{24}$/i.test(window.location.pathname) ? window.location.pathname : '/');
+  const returnToRef = useRef(isMemberRoute(window.location.pathname) ? window.location.pathname : '/');
   const userRef = useRef(user);
   const accountEpochRef = useRef(0);
   const profileVersionRef = useRef(0);
@@ -71,7 +76,7 @@ export default function App() {
         }
       }
       updateAccount(response.data);
-      if (!['/profile', '/members', '/requests'].includes(window.location.pathname) && !/^\/(?:p|u)\/[0-9a-f]{24}$/i.test(window.location.pathname) && (initial || changed)) {
+      if (!isMemberRoute(window.location.pathname) && (initial || changed)) {
         window.history.replaceState({}, '', `/${window.location.hash}`); setPath('/');
       }
     } catch (failure) {
@@ -88,15 +93,15 @@ export default function App() {
     }
   }
 
-  function navigate(next, { replace = false, keepHash = true } = {}) {
-    window.history[replace ? 'replaceState' : 'pushState']({}, '', `${next}${keepHash ? window.location.hash : ''}`);
+  function navigate(next, { replace = false, keepHash = true, state = {} } = {}) {
+    window.history[replace ? 'replaceState' : 'pushState'](state, '', `${next}${keepHash ? window.location.hash : ''}`);
     setPath(next);
     window.scrollTo({ top: 0, behavior: 'instant' });
     if (next === '/') window.requestAnimationFrame(() => document.getElementById('main-feed')?.focus({ preventScroll: true }));
   }
 
   useEffect(() => {
-    const pageName = user ? (path === '/profile' ? 'Your profile' : path.startsWith('/u/') ? 'Member profile' : path === '/members' ? 'Find members' : path === '/requests' ? 'Follow requests' : path.startsWith('/p/') ? 'A Gather moment' : 'Everyday moments') : (path === '/signup' ? 'Create account' : 'Log in');
+    const pageName = user ? (path === '/profile' ? 'Your profile' : path.startsWith('/u/') ? 'Member profile' : path === '/members' ? 'Find members' : path === '/requests' ? 'Follow requests' : path === '/saved' ? 'Saved posts' : path.startsWith('/p/') ? 'A Gather moment' : 'Everyday moments') : (path === '/signup' ? 'Create account' : 'Log in');
     document.title = `${pageName} — Gather`;
   }, [path, user]);
 
@@ -108,7 +113,7 @@ export default function App() {
       if (!userRef.current) return;
       invalidateRefresh();
       updateAccount(null); setLoading(false); setNotice('Your session has ended. Please log in again.'); setAccountError('');
-      returnToRef.current = ['/profile', '/members', '/requests'].includes(window.location.pathname) || /^\/(?:p|u)\/[0-9a-f]{24}$/i.test(window.location.pathname) ? window.location.pathname : '/';
+      returnToRef.current = isMemberRoute(window.location.pathname) ? window.location.pathname : '/';
       window.history.replaceState({}, '', `/login${window.location.hash}`); setPath('/login');
     }
     function accountChanged() { void reconcileAccount({ initial: loadingRef.current, announced: true }); }
@@ -204,8 +209,9 @@ export default function App() {
 
   const postId = /^\/p\/([0-9a-f]{24})$/i.exec(path)?.[1].toLowerCase();
   const memberMatch = /^\/u\/([0-9a-f]{24})$/i.exec(path);
-  const openPost = (id) => navigate(`/p/${id}`, { keepHash: false });
+  const openPost = (id) => navigate(`/p/${id}`, { keepHash: false, state: path === '/saved' ? { returnTo: '/saved' } : {} });
   const openProfile = (id) => navigate(`/u/${id}`, { keepHash: false });
+  const openSaved = () => navigate('/saved', { keepHash: false });
   const findMembers = () => navigate('/members', { keepHash: false });
   const followRequests = () => navigate('/requests', { keepHash: false });
   const createPost = () => setComposerAccountId(user.id);
@@ -214,12 +220,13 @@ export default function App() {
 
   return <PostEditorContext.Provider value={openPostEditor}>
     {accountError && <div className="account-feedback" role="alert"><span>{accountError}</span><button className="icon-button" type="button" aria-label="Dismiss account message" onClick={() => setAccountError('')}><Icon name="close" size={17} /></button></div>}
-    <div hidden={['/profile', '/members', '/requests'].includes(path) || Boolean(postId) || Boolean(memberMatch)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onFindMembers={findMembers} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} /></div>
+    <div hidden={isMemberRoute(path)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onOpenSaved={openSaved} onFindMembers={findMembers} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} /></div>
     {path === '/profile' && <ProfilePage key={user.id} user={user} onSaved={profileSaved} onBack={() => navigate('/')} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} />}
     {path === '/members' && <MemberSearch key={user.id} {...networkProps} />}
     {path === '/requests' && <FollowRequests key={user.id} {...networkProps} />}
+    {path === '/saved' && <SavedPage key={user.id} user={user} revision={postRevision} onBack={() => navigate('/', { keepHash: false })} onChanged={postsChanged} onOpenPost={openPost} onOpenProfile={openProfile} />}
     {memberMatch && <MemberProfile key={`${user.id}:${memberMatch[1]}`} {...networkProps} memberId={memberMatch[1]} onEdit={() => navigate('/profile', { keepHash: false })} onOpenPost={openPost} onCreate={createPost} />}
-    {postId && <PostDetail key={`${user.id}:${postId}`} postId={postId} user={user} onBack={() => navigate('/', { keepHash: false })} onChanged={postsChanged} onOpenProfile={openProfile} revision={postRevision} />}
+    {postId && <PostDetail key={`${user.id}:${postId}`} postId={postId} user={user} backToSaved={window.history.state?.returnTo === '/saved'} onBack={() => navigate(window.history.state?.returnTo === '/saved' ? '/saved' : '/', { keepHash: false })} onChanged={postsChanged} onOpenProfile={openProfile} revision={postRevision} />}
     {composerAccountId === user.id && <PostComposer key={user.id} user={user} onClose={() => { setComposerAccountId(null); postsChanged(); }} onPublished={(post) => { setComposerAccountId(null); postsChanged(); openPost(post.id); }} />}
     {postEditor?.accountId === user.id && <EditPost key={`${postEditor.accountId}:${postEditor.post.id}`} post={postEditor.post} user={user} onClose={() => setPostEditor(null)} onChanged={postsChanged} />}
   </PostEditorContext.Provider>;

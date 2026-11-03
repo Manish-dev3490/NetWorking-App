@@ -50,7 +50,7 @@ All post/photo mutations require the session, CSRF protections and captured `X-A
 | `PATCH /posts/:id` | Owner edit with `expectedVersion` |
 | `DELETE /posts/:id` | Removes an owned post and its photos |
 
-Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed. Saved-post persistence remains future work.
+Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed.
 
 ## Post likes and comments
 
@@ -68,6 +68,18 @@ Every engagement request uses the post's existing visibility rules. Private post
 | `POST /posts/:id/comments` | Adds a comment with `{ "text": "…" }`; `201` for creation or `200` for a replay |
 | `PATCH /posts/:id/comments/:commentId` | Edits an owned comment with `text` and `expectedVersion` |
 | `DELETE /posts/:id/comments/:commentId` | Removes an owned comment and returns the current comment count |
+
+## Saved posts
+
+Use the bookmark button on a post to add or remove it from your Saved list. The `/saved` page is visible only to the signed-in member and lists posts newest saved first. Bookmarks store a reference to the post, and each member can save a post once. Post responses include the viewer's `savedByMe` state.
+
+Saved checks current post visibility on every page request. Load more rechecks the earlier pages before displaying the expanded list. If a private author removes your access, their post is hidden from Saved and can reappear if access is restored. Deleting a post removes its bookmarks along with its other related data.
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /me/saved-posts` | Lists visible saved posts with `limit` and `cursor`. Requires `X-Account-Id` to match the signed-in account |
+| `PUT /posts/:id/save` | Saves a visible post and returns `savedByMe` |
+| `DELETE /posts/:id/save` | Unsaves a visible post and returns `savedByMe` |
 
 ## Members and follows
 
@@ -132,7 +144,7 @@ Run the explicit database migration before starting the backend:
 npm.cmd run db:migrate
 ```
 
-Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migration `004-engagement` adds the like and comment collections and indexes. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all four migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
+Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migration `004-engagement` adds the like and comment collections and indexes. Migration `005-saved-posts` adds the bookmark collection and indexes. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all five migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
 
 Start these commands in separate terminals:
 
@@ -189,7 +201,7 @@ The production frontend is written to `frontend/dist`. `npm.cmd run preview` ser
 
 The Gather UI uses forest green and sage, an off-white canvas, Inter typography and responsive photo cards. Desktop has three columns, tablet a compact navigation rail and mobile top/bottom navigation. Shared visual tokens live in `frontend/src/styles/global.css`.
 
-The homepage uses real Recent, Following and Your posts feeds, image carousels, author profile links, owner post actions and empty/loading/error states. Member search queries the backend; the separate loaded-post filter is labelled accordingly. Own-profile editing includes visibility and profile photos. Member pages show authorized posts and relationship lists, and the Requests page supports approval/rejection. Notifications, Saved and other future destinations still show informational dialogs.
+The homepage uses real Recent, Following and Your posts feeds, image carousels, author profile links, owner post actions and empty/loading/error states. Member search queries the backend; the separate loaded-post filter is labelled accordingly. Own-profile editing includes visibility and profile photos. Member pages show authorized posts and relationship lists, and the Requests page supports approval/rejection. Saved opens the signed-in member's bookmarks. Notifications and other future destinations still show informational dialogs.
 
 Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoDB media route. The old design-preview feed components remain isolated in `features/feed/` and are no longer rendered by Home.
 
@@ -208,6 +220,7 @@ Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoD
 - `backend/src/migrations/002-posts.js`: explicit posts/media schema and index migration.
 - `backend/src/migrations/003-network.js`: relationship/search indexes and profile-photo/policy schema.
 - `backend/src/migrations/004-engagement.js`: post like and comment schema and indexes.
+- `backend/src/migrations/005-saved-posts.js`: bookmark schema and indexes.
 - `backend/src/middleware/`: transport, request IDs, CSRF/rate limits and safe errors.
 - `backend/src/config/`: environment validation and reusable MongoDB connection.
 - `backend/test/`: isolated HTTP/unit tests and optional real-database integration tests.
@@ -223,8 +236,8 @@ Original documents in `docs/` remain read-only:
 
 The database/API documents govern V1 technical scope where older proposals differ. Explicit product-owner decisions override their email-verification and external-object-storage proposals: signup skips verification, and uploaded product photos will be stored in MongoDB Atlas. The source documents themselves have not been changed. This slice combines their Origin/custom-header requirements with signed session-bound CSRF tokens.
 
-Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, likes/unlikes, flat comments with author editing/deletion, transport security, health checks and schema/index migrations.
+Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, likes/unlikes, flat comments with author editing/deletion, Saved posts, transport security, health checks and schema/index migrations.
 
 Product-owner media decisions are implemented above: MongoDB binary storage and 5 MiB limits replace the original external-storage proposal. Image bytes count toward Atlas storage usage. Profiles, follows and the Following feed now form the application's core networking flow.
 
-Password recovery must also be completed before inviting external testers. Saved items, hashtag search, notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.
+Password recovery must also be completed before inviting external testers. Custom Saved collections, hashtag search, notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.

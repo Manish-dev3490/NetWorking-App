@@ -4,7 +4,7 @@ import { apiRequest } from '../../services/api.js';
 import { describeError } from '../auth/form-utils.js';
 import { notifyEngagement, pendingLikes } from './post-engagement.js';
 
-export default function PostReactions({ post, user, detail, onOpenPost, onAccessLost }) {
+export default function PostReactions({ post, user, detail, onOpenPost, onAccessLost, saveControl }) {
   const key = `${user.id}:${post.id}`;
   const [pending, setPending] = useState(pendingLikes.has(key));
   const [error, setError] = useState('');
@@ -54,6 +54,7 @@ export default function PostReactions({ post, user, detail, onOpenPost, onAccess
         onClick={detail ? () => document.getElementById('post-comments-heading')?.focus() : () => onOpenPost(post.id)}>
         <Icon name="message" size={19} />{commentLabel}
       </button>
+      {saveControl}
     </div>
     {error && <p className="post-inline-error" role="alert">{error}</p>}
   </div>;

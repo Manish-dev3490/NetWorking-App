@@ -22,7 +22,7 @@ const feedSource = await readFile(new URL('../../frontend/src/features/posts/Pos
 const engagementSource = await readFile(new URL('../../frontend/src/features/posts/post-engagement.js', import.meta.url), 'utf8');
 const providerType = 'PostEditorProvider';
 const componentTypes = ['HomePage', 'AuthPage', 'ProfilePage', 'Icon', 'PostComposer', 'PostDetail',
-  'MemberSearch', 'MemberProfile', 'FollowRequests', 'EditPost', 'Avatar', 'RealPostCard', 'PostComments'];
+  'MemberSearch', 'MemberProfile', 'FollowRequests', 'EditPost', 'Avatar', 'RealPostCard', 'PostComments', 'SavedPage', 'PostFeed'];
 
 function nodes(tree) {
   if (!tree || typeof tree !== 'object') return [];
@@ -87,7 +87,11 @@ async function application(path = '/') {
   let currentAccount = account;
   const browser = new EventTarget();
   browser.location = { pathname: path, hash: '' };
-  browser.history = { replaceState() {}, pushState() {} };
+  browser.history = {
+    state: null,
+    replaceState(state) { this.state = state; },
+    pushState(state) { this.state = state; },
+  };
   browser.scrollTo = () => {};
   browser.requestAnimationFrame = (callback) => callback();
   const document = new EventTarget();
@@ -109,10 +113,137 @@ function editorNode(tree) { return nodes(tree).find((node) => node.type === 'Edi
 function input(tree, type) { return nodes(tree).find((node) => node.type === type); }
 
 function engagement() {
-  return runInNewContext(`${engagementSource.replace(/^export /gm, '')}\n({ pendingLikes, notifyEngagement, observeEngagement })`, {
+  return runInNewContext(`${engagementSource.replace(/^export /gm, '')}\n({ pendingLikes, pendingSaves, notifyEngagement, observeEngagement })`, {
     window: new EventTarget(), EventTarget, Event, CustomEvent,
   });
 }
+
+test('Saved opens from Home and rechecks its posts on tab focus', async () => {
+  const app = await application();
+  input(app.render(), 'HomePage').props.onOpenSaved();
+  const saved = input(app.render(), 'SavedPage');
+  assert.ok(saved);
+  assert.equal(saved.props.user.id, account.id);
+  app.browser.dispatchEvent(new Event('focus')); await setImmediate();
+  const focused = input(app.render(), 'SavedPage');
+  assert.equal(focused.props.revision, saved.props.revision + 1);
+  focused.props.onOpenPost(post.id);
+  const detail = input(app.render(), 'PostDetail');
+  assert.equal(detail.props.backToSaved, true);
+  detail.props.onBack();
+  input(app.render(), 'SavedPage').props.onBack();
+  assert.equal(input(app.render(), 'SavedPage'), undefined);
+  app.unmount();
+});
+
+test('a completed unsave removes its card from Saved even if the request started before navigation', async () => {
+  const events = engagement();
+  const savedPost = { ...post, savedByMe: true };
+  const saveSource = await readFile(new URL('../../frontend/src/features/posts/PostSaveButton.jsx', import.meta.url), 'utf8');
+  let finish;
+  const control = renderer(saveSource, 'PostSaveButton', {
+    ...events,
+    apiRequest: (path, options) => {
+      assert.equal(path, `posts/${post.id}/save`);
+      assert.equal(options.method, 'DELETE');
+      assert.equal(options.accountId, account.id);
+      return new Promise((resolve) => { finish = resolve; });
+    },
+  });
+  const button = input(control.render({ post: savedPost, user: account }), 'button');
+  control.flushEffects();
+  assert.equal(button.props['aria-pressed'], true);
+  const unsaving = button.props.onClick();
+  control.unmount();
+
+  const reads = [];
+  const feed = renderer(feedSource, 'PostFeed', {
+    ...events, URLSearchParams,
+    apiRequest: (path, options) => {
+      assert.match(path, /^me\/saved-posts\?/);
+      assert.equal(options.accountId, account.id);
+      return new Promise((resolve) => reads.push(resolve));
+    },
+  });
+  const props = { user: account, scope: 'saved', revision: 0 };
+  feed.render(props); feed.flushEffects();
+  events.notifyEngagement('different-account', post.id, { savedByMe: false });
+  reads[0]({ data: [savedPost] }); await setImmediate();
+  assert.ok(input(feed.render(props), 'RealPostCard'));
+
+  props.revision += 1;
+  feed.render(props); feed.flushEffects();
+  assert.equal(input(feed.render(props), 'RealPostCard'), undefined, 'revalidation hides the previously loaded page');
+  finish({ data: { savedByMe: false } }); await unsaving;
+  reads[1]({ data: [savedPost] }); await setImmediate();
+  assert.equal(input(feed.render(props), 'RealPostCard'), undefined, 'a stale read cannot restore an unsaved post');
+  feed.unmount();
+});
+
+test('Saved Load more rechecks earlier pages and drops revoked and deleted posts', async () => {
+  const bookmarks = ['revoked', 'deleted', 'retained', 'next'].map((id) => ({ ...post, id, savedByMe: true }));
+  const [revoked, deleted, retained, next] = bookmarks;
+  const reads = [];
+  const feed = renderer(feedSource, 'PostFeed', {
+    ...engagement(), URLSearchParams,
+    apiRequest(path, options) {
+      assert.equal(options.accountId, account.id);
+      return new Promise((resolve) => reads.push({ cursor: new URLSearchParams(path.split('?')[1]).get('cursor'), resolve }));
+    },
+  });
+  const props = { user: account, scope: 'saved' };
+  const cards = () => nodes(feed.render(props)).filter((node) => node.type === 'RealPostCard').map((node) => node.props.post.id);
+  feed.render(props); feed.flushEffects();
+  reads[0].resolve({ data: [revoked, deleted, retained], meta: { hasMore: true, nextCursor: 'old' } }); await setImmediate();
+  assert.deepEqual(cards(), ['revoked', 'deleted', 'retained']);
+  const loadMore = nodes(feed.render(props)).find((node) => node.type === 'button' && node.children.includes('Load more posts'));
+  const loading = loadMore.props.onClick();
+  assert.equal(reads[1].cursor, null);
+  assert.deepEqual(cards(), []);
+  reads[1].resolve({ data: [retained], meta: { hasMore: true, nextCursor: 'fresh' } }); await setImmediate();
+  assert.equal(reads[2].cursor, 'fresh');
+  reads[2].resolve({ data: [next] }); await loading; await setImmediate();
+  assert.deepEqual(cards(), ['retained', 'next']);
+  feed.unmount();
+});
+
+test('a late bookmark 404 clears the replacement Saved view and cannot restore the card from an older read', async () => {
+  const events = engagement();
+  const savedPost = { ...post, savedByMe: true };
+  const saveSource = await readFile(new URL('../../frontend/src/features/posts/PostSaveButton.jsx', import.meta.url), 'utf8');
+  let fail;
+  const control = renderer(saveSource, 'PostSaveButton', {
+    ...events, apiRequest: () => new Promise((resolve, reject) => { fail = reject; }),
+  });
+  const button = input(control.render({ post: savedPost, user: account, onAccessLost: () => assert.fail('departed view callback') }), 'button');
+  control.flushEffects();
+  const unsaving = button.props.onClick();
+  control.unmount();
+
+  const reads = [];
+  const feed = renderer(feedSource, 'PostFeed', {
+    ...events, URLSearchParams,
+    apiRequest: () => new Promise((resolve) => reads.push(resolve)),
+  });
+  const props = { user: account, scope: 'saved' };
+  feed.render(props); feed.flushEffects();
+  reads[0]({ data: [savedPost] }); await setImmediate();
+  assert.ok(input(feed.render(props), 'RealPostCard'));
+  events.notifyEngagement('different-account', post.id, { unavailable: true });
+  assert.ok(input(feed.render(props), 'RealPostCard'));
+  fail(Object.assign(new Error('Unavailable'), { status: 404 })); await unsaving;
+  assert.equal(input(feed.render(props), 'RealPostCard'), undefined);
+
+  const olderRead = renderer(feedSource, 'PostFeed', {
+    ...events, URLSearchParams,
+    apiRequest: () => new Promise((resolve) => reads.push(resolve)),
+  });
+  olderRead.render(props); olderRead.flushEffects();
+  events.notifyEngagement(account.id, post.id, { unavailable: true });
+  reads[1]({ data: [savedPost] }); await setImmediate();
+  assert.equal(input(olderRead.render(props), 'RealPostCard'), undefined);
+  feed.unmount(); olderRead.unmount();
+});
 
 function nodePath(tree, type) {
   if (!tree || typeof tree !== 'object') return null;

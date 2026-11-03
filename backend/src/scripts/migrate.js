@@ -4,6 +4,7 @@ import { migrateAuth } from '../migrations/001-auth.js';
 import { migratePosts } from '../migrations/002-posts.js';
 import { migrateNetwork } from '../migrations/003-network.js';
 import { migrateEngagement } from '../migrations/004-engagement.js';
+import { migrateSavedPosts } from '../migrations/005-saved-posts.js';
 
 const database = createDatabase();
 try {
@@ -17,6 +18,8 @@ try {
   console.info(network.applied ? 'Applied member network migration 003-network.' : 'Member network migration 003-network is already applied.');
   const engagement = await migrateEngagement(database.connection);
   console.info(engagement.applied ? 'Applied post engagement migration 004-engagement.' : 'Post engagement migration 004-engagement is already applied.');
+  const saved = await migrateSavedPosts(database.connection);
+  console.info(saved.applied ? 'Applied Saved posts migration 005-saved-posts.' : 'Saved posts migration 005-saved-posts is already applied.');
 } catch {
   console.error('Database migration failed. Check database access, permissions, duplicate identities and existing indexes. No records were deleted.');
   process.exitCode = 1;

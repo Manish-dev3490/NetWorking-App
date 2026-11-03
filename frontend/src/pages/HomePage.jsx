@@ -12,7 +12,6 @@ const navigation = [
 ];
 const upcoming = {
   Notifications: ['A quiet place to catch up', 'Notifications will arrive as follows, likes and comments become available.'],
-  Saved: ['Keep a little inspiration', 'Saved posts and collections are coming in a later step.'],
   Privacy: ['Your space, thoughtfully protected', 'Public accounts can be viewed by signed-in members. Private accounts share posts and connections with approved followers. Manage account privacy in Edit profile.'],
   Terms: ['The little details matter', 'Gather’s terms will be available before launch.'],
   Safety: ['A community built on care', 'Reporting, blocking and community safety tools are coming in a later step.'],
@@ -23,7 +22,7 @@ function Brand({ onClick }) {
   return <button type="button" className="brand" onClick={onClick} aria-label="Gather home"><span className="brand-mark"><Icon name="leaf" size={23} /></span><span className="brand-copy"><strong>Gather</strong><span>Everyday moments</span></span></button>;
 }
 
-export default function HomePage({ user, onEditProfile, onLogout, loggingOut = false, onCreate, onOpenPost, onOpenProfile, onFindMembers, onRequests, postRevision, onPostChanged }) {
+export default function HomePage({ user, onEditProfile, onLogout, loggingOut = false, onCreate, onOpenPost, onOpenProfile, onOpenSaved, onFindMembers, onRequests, postRevision, onPostChanged }) {
   const [tab, setTab] = useState('following');
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -40,6 +39,7 @@ export default function HomePage({ user, onEditProfile, onLogout, loggingOut = f
     else if (name === 'Your posts') { setTab('own'); setQuery(''); setSearchOpen(false); window.scrollTo({ top: 0, behavior: 'instant' }); }
     else if (name === 'Find members') onFindMembers();
     else if (name === 'Follow requests') onRequests();
+    else if (name === 'Saved') onOpenSaved();
     else if (name === 'Profile') onOpenProfile(user.id);
     else showUpcoming(name);
   }
@@ -70,7 +70,7 @@ export default function HomePage({ user, onEditProfile, onLogout, loggingOut = f
       <section className="context-card community-card"><h2>A little good company</h2><p>Find a familiar face or a new perspective. Follow members to gather their moments in your Following feed.</p><button type="button" className="text-button" onClick={onFindMembers}>Find members<Icon name="chevron-right" size={14} /></button></section>
       <footer className="rail-footer"><div>{['Privacy', 'Terms', 'Safety', 'Help'].map((name) => <button key={name} type="button" onClick={() => showUpcoming(name)}>{name}</button>)}</div><p>© 2026 Gather. Room for the everyday.</p></footer>
     </aside></div></div>
-    <nav className="bottom-nav" aria-label="Mobile navigation"><button type="button" className={tab === 'following' ? 'is-active' : ''} onClick={home}><span><Icon name="home" size={21} /></span><span>Home</span></button><button type="button" onClick={onFindMembers}><span><Icon name="search" size={21} /></span><span>Members</span></button><button type="button" className="bottom-create" aria-label="Create post" onClick={onCreate}><span><Icon name="plus" size={21} /></span><span>Create</span></button><button type="button" onClick={onRequests}><span><Icon name="user-check" size={21} /></span><span>Requests</span></button><button type="button" onClick={() => onOpenProfile(user.id)}><span><Icon name="user" size={21} /></span><span>Profile</span></button></nav>
+    <nav className="bottom-nav" aria-label="Mobile navigation"><button type="button" className={tab === 'following' ? 'is-active' : ''} onClick={home}><span><Icon name="home" size={21} /></span><span>Home</span></button><button type="button" onClick={onFindMembers}><span><Icon name="search" size={21} /></span><span>Members</span></button><button type="button" className="bottom-create" aria-label="Create post" onClick={onCreate}><span><Icon name="plus" size={21} /></span><span>Create</span></button><button type="button" onClick={onRequests}><span><Icon name="user-check" size={21} /></span><span>Requests</span></button><button type="button" onClick={onOpenSaved}><span><Icon name="bookmark" size={21} /></span><span>Saved</span></button><button type="button" onClick={() => onOpenProfile(user.id)}><span><Icon name="user" size={21} /></span><span>Profile</span></button></nav>
     {dialog && <Dialog title={dialog.title} description={dialog.description} onClose={() => setDialog(null)} />}
   </div>;
 }

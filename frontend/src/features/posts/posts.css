@@ -52,6 +52,7 @@ button.post-reaction:hover { background: var(--color-sage); }
 button.post-reaction:disabled { opacity: .6; }
 .post-reaction[aria-pressed="true"] { color: #9b464c; }
 .post-reaction[aria-pressed="true"] svg { fill: currentColor; }
+.post-save-button[aria-pressed="true"] { color: var(--color-primary-dark); background: var(--color-sage); }
 .post-inline-notice, .post-inline-error { margin: 7px 0 4px; padding: 9px 11px; border-radius: 8px; color: #47654e; background: #edf4ec; font-size: 11px; overflow-wrap: anywhere; }
 .post-inline-error { color: #8b3936; background: #fbefed; }
 .delete-post-confirm { margin: 12px 0 6px; padding: 15px; border: 1px solid #eddbd6; border-radius: 11px; background: #fffbfa; }
@@ -107,6 +108,7 @@ button.post-reaction:disabled { opacity: .6; }
 .post-detail-header > .button { margin-bottom: 24px; }
 .post-detail-header h1 { color: var(--color-primary-dark); font-size: 28px; font-weight: 500; letter-spacing: -.8px; }
 .post-detail-header h1:focus { outline: none; }
+.saved-posts-intro { margin-top: 6px; color: var(--color-muted); font-size: 12px; }
 .post-comments { margin-top: 20px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: white; box-shadow: var(--shadow-card); }
 .post-comments h2 { margin-bottom: 12px; color: var(--color-primary-dark); font-size: 20px; font-weight: 500; }
 .comment-form { display: grid; gap: 8px; padding: 12px 0; }

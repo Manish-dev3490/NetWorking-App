@@ -24,6 +24,13 @@ function emptyBody(req) {
   }
 }
 
+function requireAccount(req) {
+  const account = req.get('X-Account-Id');
+  if (!account || account.toLowerCase() !== req.viewer.id) {
+    throw new HttpError(409, 'ACCOUNT_CHANGED', 'Your signed-in account has changed. Please review it before continuing.');
+  }
+}
+
 function pageOptions(req) {
   for (const name of Object.keys(req.query)) {
     if (!['limit', 'cursor'].includes(name)) throw new HttpError(422, 'VALIDATION_ERROR', 'Unsupported feed filter.');
@@ -46,16 +53,11 @@ export function createPostRouter({ authService, postService }) {
 
   router.use(async (req, res, next) => {
     // Only claimed post/media routes resolve a member; leave unrelated API routes alone.
-    if (!/^\/(?:posts(?:\/|$)|media(?:\/|$)|me\/posts\/?$|users\/[^/]+\/posts\/?$)/i.test(req.path)) return next('router');
+    if (!/^\/(?:posts(?:\/|$)|media(?:\/|$)|me\/(?:posts|saved-posts)\/?$|users\/[^/]+\/posts\/?$)/i.test(req.path)) return next('router');
     const { user } = await authService.resolveSession(sessionToken(req));
     if (user.status !== 'active') throw new HttpError(403, 'ACCOUNT_RESTRICTED', 'This account cannot access posts.');
     req.viewer = user;
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-      const account = req.get('X-Account-Id');
-      if (!account || account.toLowerCase() !== user.id) {
-        throw new HttpError(409, 'ACCOUNT_CHANGED', 'Your signed-in account has changed. Please review it before continuing.');
-      }
-    }
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) requireAccount(req);
     return next();
   });
 
@@ -116,6 +118,11 @@ export function createPostRouter({ authService, postService }) {
     const page = await postService.listOwn(req.viewer, pageOptions(req));
     respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
   });
+  router.get('/me/saved-posts', async (req, res) => {
+    requireAccount(req);
+    const page = await postService.listSaved(req.viewer, pageOptions(req));
+    respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
+  });
   router.get('/users/:userId/posts', async (req, res) => {
     const page = await postService.listUser(req.viewer, req.params.userId, pageOptions(req));
     respond(req, res, page.items, 200, { nextCursor: page.nextCursor, hasMore: page.hasMore });
@@ -127,6 +134,14 @@ export function createPostRouter({ authService, postService }) {
     respond(req, res, result.post, result.replayed ? 200 : 201);
   });
   router.get('/posts/:postId', async (req, res) => respond(req, res, await postService.getPost(req.viewer, req.params.postId)));
+  router.put('/posts/:postId/save', async (req, res) => {
+    emptyBody(req);
+    respond(req, res, await postService.setSaved(req.viewer, req.params.postId, true));
+  });
+  router.delete('/posts/:postId/save', async (req, res) => {
+    emptyBody(req);
+    respond(req, res, await postService.setSaved(req.viewer, req.params.postId, false));
+  });
   router.put('/posts/:postId/like', async (req, res) => {
     emptyBody(req);
     respond(req, res, await postService.setLike(req.viewer, req.params.postId, true));

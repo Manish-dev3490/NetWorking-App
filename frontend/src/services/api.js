@@ -70,12 +70,12 @@ export async function apiRequest(path, options = {}) {
   const mutating = !safeMethods.has(requestMethod);
   const headers = new Headers(customHeaders);
   headers.set('Accept', 'application/json');
+  // Keep the originating account across cookie changes and CSRF retries.
+  if (accountId) headers.set('X-Account-Id', accountId);
   if (mutating) {
     headers.set('X-App-Request', 'web');
     if (rawBody === undefined) headers.set('Content-Type', 'application/json');
     else if (!headers.has('Content-Type')) headers.set('Content-Type', rawBody.type || 'application/octet-stream');
-    // Keep the form's original account precondition across CSRF refreshes.
-    if (accountId) headers.set('X-Account-Id', accountId);
   } else if (body !== undefined) headers.set('Content-Type', 'application/json');
 
   async function send(retryCsrf) {

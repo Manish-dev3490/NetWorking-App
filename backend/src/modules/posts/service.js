@@ -28,7 +28,7 @@ function canRead(post, author, viewerId, accepted = false) {
     && (post.authorId.equals(viewerId) || author.visibility === 'public' || accepted);
 }
 
-function postDto(post, author, viewerId, likedByMe = false) {
+function postDto(post, author, viewerId, { likedByMe = false, savedByMe = false } = {}) {
   return {
     id: post._id.toHexString(),
     author: { id: author._id.toHexString(), username: author.usernameNormalized, displayName: author.displayName,
@@ -40,7 +40,7 @@ function postDto(post, author, viewerId, likedByMe = false) {
     })),
     createdAt: post.createdAt.toISOString(), updatedAt: post.updatedAt.toISOString(),
     version: post.editVersion, canManage: post.authorId.equals(viewerId), commentsEnabled: post.commentsEnabled,
-    likeCount: post.likeCount ?? 0, commentCount: post.commentCount ?? 0, likedByMe,
+    likeCount: post.likeCount ?? 0, commentCount: post.commentCount ?? 0, likedByMe, savedByMe,
   };
 }
 
@@ -51,6 +51,28 @@ function canonicalHash(input) {
   })).digest('hex');
 }
 
+function viewerLikeLookup(viewerId, postIdField = '_id') {
+  return { $lookup: { from: 'post_likes', localField: postIdField, foreignField: 'postId', pipeline: [
+    { $match: { memberId: viewerId } }, { $project: { _id: 1 } },
+  ], as: 'viewerLike' } };
+}
+
+function pageLimit(query) {
+  const limit = query.limit === undefined ? 10 : Number(query.limit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+    throw new HttpError(422, 'VALIDATION_ERROR', 'Choose a page size between 1 and 20.');
+  }
+  return limit;
+}
+
+function afterPosition(position) {
+  if (!position) return {};
+  return { $or: [
+    { createdAt: { $lt: position.date } },
+    { createdAt: position.date, _id: { $lt: new mongoose.Types.ObjectId(position.id) } },
+  ] };
+}
+
 export function createPostService({ connection, now = () => new Date(), cursorSecret }) {
   const db = connection.db;
   if (!db) throw new Error('Connect to MongoDB before creating the post service.');
@@ -59,6 +81,8 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
   const assets = db.collection('media_assets');
   const images = db.collection('media_images');
   const follows = db.collection('follows');
+  const collections = db.collection('saved_collections');
+  const savedPosts = db.collection('saved_posts');
   const cursors = createPostCursors(cursorSecret, now);
   const { hasLike, removePostEngagement, ...engagement } = createEngagement({ db, now, cursors, withVisiblePost });
 
@@ -90,6 +114,19 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
 
   async function authorFor(post, session) {
     return users.findOne({ _id: post.authorId }, { session, projection: authorProjection });
+  }
+
+  function defaultCollection(ownerId, session) {
+    return collections.findOne({ ownerId, isDefault: true }, { session, projection: { _id: 1 } });
+  }
+
+  async function viewerEngagement(postId, viewerId, session) {
+    const likedByMe = await hasLike(postId, viewerId, session);
+    const collection = await defaultCollection(viewerId, session);
+    const savedByMe = Boolean(collection && await savedPosts.findOne({ postId, collectionId: collection._id }, {
+      session, projection: { _id: 1 },
+    }));
+    return { likedByMe, savedByMe };
   }
 
   async function canViewAuthor(viewerId, author, session) {
@@ -145,18 +182,16 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     if (existing.status === 'deleted') throw new HttpError(409, 'RESOURCE_DELETED', 'This post was deleted. Start a new post to publish new content.');
     const author = await authorFor(existing, session);
     if (!canRead(existing, author, viewerId)) throw unavailable();
-    return { post: postDto(existing, author, viewerId, await hasLike(existing._id, viewerId, session)), replayed: true };
+    return { post: postDto(existing, author, viewerId, await viewerEngagement(existing._id, viewerId, session)), replayed: true };
   }
 
   async function list(viewer, query, scope, targetId) {
     const member = await activeViewer(viewer);
-    const limit = query.limit === undefined ? 10 : Number(query.limit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
-      throw new HttpError(422, 'VALIDATION_ERROR', 'Choose a page size between 1 and 20.');
-    }
+    const limit = pageLimit(query);
     const target = scope === 'user' ? objectId(targetId, 'userId') : null;
     if (target && !await canViewAuthor(member._id, await users.findOne({ _id: target }, { projection: authorProjection }))) throw unavailable();
     const cursorScope = target ? `user:${target.toHexString()}` : scope;
+    const collection = await defaultCollection(member._id);
     let followingIds;
     if (scope === 'following') {
       followingIds = await follows.distinct('followingId', { followerId: member._id, status: 'accepted' });
@@ -168,21 +203,18 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     let scanned = 0;
     let hasMore = false;
     while (scanned < 200 && items.length < limit) {
-      const match = { status: 'published' };
+      const match = { status: 'published', ...afterPosition(position) };
       if (scope === 'own') match.authorId = member._id;
       if (target) match.authorId = target;
       if (followingIds) match.authorId = { $in: followingIds };
-      if (position) match.$or = [
-        { createdAt: { $lt: position.date } },
-        { createdAt: position.date, _id: { $lt: new mongoose.Types.ObjectId(position.id) } },
-      ];
       const batchLimit = Math.min(50, 200 - scanned);
       const batch = await posts.aggregate([
         { $match: match }, { $sort: { createdAt: -1, _id: -1 } }, { $limit: batchLimit },
         { $lookup: { from: 'users', localField: 'authorId', foreignField: '_id', pipeline: [{ $project: authorProjection }], as: 'author' } },
-        { $lookup: { from: 'post_likes', localField: '_id', foreignField: 'postId', pipeline: [
-          { $match: { memberId: member._id } }, { $project: { _id: 1 } },
-        ], as: 'viewerLike' } },
+        viewerLikeLookup(member._id),
+        { $lookup: { from: 'saved_posts', localField: '_id', foreignField: 'postId', pipeline: [
+          { $match: { collectionId: collection?._id ?? null } }, { $project: { _id: 1 } },
+        ], as: 'viewerSave' } },
       ], { readConcern: { level: 'snapshot' } }).toArray();
       if (!batch.length) { hasMore = false; break; }
       // Refresh accepted relationships for this bounded batch. A pending
@@ -201,7 +233,9 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         if (canRead(candidate, author, member._id, acceptedAuthor)
           && (scope !== 'recent' || author.visibility === 'public')
           && (scope !== 'following' || candidate.authorId.equals(member._id) || acceptedAuthor)) {
-          items.push(postDto(candidate, author, member._id, candidate.viewerLike.length > 0));
+          items.push(postDto(candidate, author, member._id, {
+            likedByMe: candidate.viewerLike.length > 0, savedByMe: candidate.viewerSave.length > 0,
+          }));
         }
         hasMore = index < batch.length - 1 || batch.length === batchLimit;
         if (items.length === limit) break;
@@ -352,13 +386,65 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
 
     getPost(viewer, postId) {
       return withVisiblePost(viewer, postId, false, async (post, member, session, author) =>
-        postDto(post, author, member._id, await hasLike(post._id, member._id, session)));
+        postDto(post, author, member._id, await viewerEngagement(post._id, member._id, session)));
     },
 
     listRecent(viewer, query = {}) { return list(viewer, query, 'recent'); },
     listOwn(viewer, query = {}) { return list(viewer, query, 'own'); },
     listFollowing(viewer, query = {}) { return list(viewer, query, 'following'); },
     listUser(viewer, targetId, query = {}) { return list(viewer, query, 'user', targetId); },
+
+    setSaved(viewer, postId, savedByMe) {
+      return withVisiblePost(viewer, postId, true, async (post, member, session) => {
+        const collection = await defaultCollection(member._id, session);
+        if (!collection) throw new HttpError(409, 'SAVED_COLLECTION_UNAVAILABLE', 'Your Saved collection is unavailable.');
+        const pair = { collectionId: collection._id, postId: post._id };
+        if (savedByMe) await savedPosts.updateOne(pair, { $setOnInsert: { ...pair, createdAt: now() } }, { upsert: true, session });
+        else await savedPosts.deleteOne(pair, { session });
+        return { savedByMe };
+      });
+    },
+
+    listSaved(viewer, query = {}) {
+      const limit = pageLimit(query);
+      return connection.transaction(async (session) => {
+        const member = await activeViewer(viewer, session);
+        const viewerId = member._id.toHexString();
+        const position = cursors.decode(query.cursor, viewerId, 'saved');
+        const collection = await defaultCollection(member._id, session);
+        if (!collection) return { items: [], hasMore: false, nextCursor: null };
+        // Read the reference, post, author policy and accepted follow from one snapshot.
+        const rows = await savedPosts.aggregate([
+          { $match: { collectionId: collection._id, ...afterPosition(position) } },
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $lookup: { from: 'posts', localField: 'postId', foreignField: '_id', pipeline: [
+            { $match: { status: 'published' } },
+          ], as: 'post' } },
+          { $unwind: '$post' },
+          { $lookup: { from: 'users', localField: 'post.authorId', foreignField: '_id', pipeline: [
+            { $match: { status: 'active' } }, { $project: authorProjection },
+          ], as: 'author' } },
+          { $unwind: '$author' },
+          { $lookup: { from: 'follows', localField: 'post.authorId', foreignField: 'followingId', pipeline: [
+            { $match: { followerId: member._id, status: 'accepted' } }, { $project: { _id: 1 } },
+          ], as: 'acceptedFollow' } },
+          { $match: { $or: [
+            { 'post.authorId': member._id }, { 'author.visibility': 'public' }, { 'acceptedFollow.0': { $exists: true } },
+          ] } },
+          { $limit: limit + 1 },
+          viewerLikeLookup(member._id, 'postId'),
+        ], { session }).toArray();
+        const page = rows.slice(0, limit);
+        const hasMore = rows.length > limit;
+        return {
+          items: page.map(({ post, author, viewerLike }) => postDto(post, author, member._id, {
+            likedByMe: viewerLike.length > 0, savedByMe: true,
+          })),
+          hasMore,
+          nextCursor: hasMore ? cursors.encode(viewerId, 'saved', page.at(-1)) : null,
+        };
+      }, { readConcern: { level: 'snapshot' } });
+    },
 
     async updatePost(viewer, postId, input) {
       const id = objectId(postId, 'postId');
@@ -379,7 +465,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
           $set: fields, $inc: { editVersion: 1 },
         }, { session, returnDocument: 'after' });
         if (!updated) throw new HttpError(409, 'VERSION_CONFLICT', 'This post changed elsewhere. Reload it before editing again.');
-        result = postDto(updated, author, member._id, await hasLike(updated._id, member._id, session));
+        result = postDto(updated, author, member._id, await viewerEngagement(updated._id, member._id, session));
       });
       return result;
     },
@@ -401,6 +487,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
           $set: { status: 'deleted', likeCount: 0, commentCount: 0, deletedAt: now(), updatedAt: now() },
         }, { session });
         await removePostEngagement(id, session);
+        await savedPosts.deleteMany({ postId: id }, { session });
         await images.deleteMany({ _id: { $in: ids } }, { session });
         await assets.deleteMany({ _id: { $in: ids }, ownerId: member._id, postId: id }, { session });
       });

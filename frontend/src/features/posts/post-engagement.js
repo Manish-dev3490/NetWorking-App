@@ -1,19 +1,24 @@
 const engagementEvent = 'gather:post-engagement';
-const likesInFlight = new Set();
-const pendingLikeEvents = new EventTarget();
 
-export const pendingLikes = {
-  has(key) { return likesInFlight.has(key); },
-  set(key, pending) {
-    if (pending) likesInFlight.add(key);
-    else likesInFlight.delete(key);
-    pendingLikeEvents.dispatchEvent(new Event(key));
-  },
-  observe(key, listener) {
-    pendingLikeEvents.addEventListener(key, listener);
-    return () => pendingLikeEvents.removeEventListener(key, listener);
-  },
-};
+function pendingActions() {
+  const inFlight = new Set();
+  const events = new EventTarget();
+  return {
+    has(key) { return inFlight.has(key); },
+    set(key, pending) {
+      if (pending) inFlight.add(key);
+      else inFlight.delete(key);
+      events.dispatchEvent(new Event(key));
+    },
+    observe(key, listener) {
+      events.addEventListener(key, listener);
+      return () => events.removeEventListener(key, listener);
+    },
+  };
+}
+
+export const pendingLikes = pendingActions();
+export const pendingSaves = pendingActions();
 
 export function notifyEngagement(accountId, postId, summary) {
   window.dispatchEvent(new CustomEvent(engagementEvent, { detail: { accountId, postId, summary } }));

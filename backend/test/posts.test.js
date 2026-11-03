@@ -38,6 +38,14 @@ async function serve(t, { active = true } = {}) {
     async getPost(viewer, id) { calls.push(['getPost', viewer, id]); return samplePost; },
     async listRecent(viewer, query) { calls.push(['listRecent', viewer, query]); return { items: [samplePost], nextCursor: 'opaque-next', hasMore: true }; },
     async listOwn(viewer, query) { calls.push(['listOwn', viewer, query]); return { items: [samplePost], nextCursor: null, hasMore: false }; },
+    async listSaved(viewer, query) {
+      calls.push(['listSaved', viewer, query]);
+      return { items: [{ ...samplePost, savedByMe: true }], nextCursor: 'opaque-saved-cursor', hasMore: true };
+    },
+    async setSaved(viewer, id, savedByMe) {
+      calls.push(['setSaved', viewer, id, savedByMe]);
+      return { savedByMe };
+    },
     async updatePost(viewer, id, input) { calls.push(['updatePost', viewer, id, input]); return { ...samplePost, caption: input.caption, version: 1 }; },
     async deletePost(viewer, id) { calls.push(['deletePost', viewer, id]); },
     async setLike(viewer, id, liked) {
@@ -255,6 +263,51 @@ test('like and flat comment routes require a session and protect mutations again
     await expectError(await client.request(path, { method, headers }), 409, 'ACCOUNT_CHANGED');
   }
   assert.deepEqual(client.calls, []);
+});
+
+test('Saved routes protect bookmarks with session, CSRF and account preconditions', async (t) => {
+  const client = await serve(t);
+  const saved = '/me/saved-posts';
+  const toggle = `/posts/${postId}/save`;
+  const contentType = { 'Content-Type': 'application/json' };
+  await expectError(await client.request(saved, { anonymous: true }), 401, 'AUTH_REQUIRED');
+  await expectError(await client.request(saved), 409, 'ACCOUNT_CHANGED');
+  const staleAccount = { 'X-Account-Id': assetId };
+  const mismatch = await expectError(await client.request(saved, { headers: staleAccount }), 409, 'ACCOUNT_CHANGED');
+  assert.equal(mismatch.data, undefined);
+  assert.equal((await client.request(saved, { method: 'HEAD', headers: staleAccount })).status, 409);
+  await expectError(await client.request(`${saved}?memberId=${member.id}`, { headers: { 'X-Account-Id': member.id } }), 422, 'VALIDATION_ERROR');
+  for (const method of ['PUT', 'DELETE']) {
+    await expectError(await client.request(toggle, { method, headers: contentType }), 403, 'CSRF_REJECTED');
+    const headers = await client.mutationHeaders({ ...contentType, 'X-Account-Id': assetId });
+    await expectError(await client.request(toggle, { method, headers }), 409, 'ACCOUNT_CHANGED');
+  }
+  const restricted = await serve(t, { active: false });
+  await expectError(await restricted.request(saved), 403, 'ACCOUNT_RESTRICTED');
+  assert.deepEqual(client.calls, []);
+  assert.deepEqual(restricted.calls, []);
+});
+
+test('Saved routes return canonical bookmark state and the paginated post envelope', async (t) => {
+  const client = await serve(t);
+  const toggle = `/posts/${postId}/save`;
+  const headers = await client.mutationHeaders({ 'Content-Type': 'application/json' });
+  await expectError(await client.request(toggle, { method: 'PUT', body: { savedByMe: true }, headers }), 422, 'VALIDATION_ERROR');
+  for (const [method, savedByMe] of [['PUT', true], ['DELETE', false]]) {
+    const response = await client.request(toggle, { method, headers });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).data, { savedByMe });
+  }
+  const response = await client.request('/me/saved-posts?limit=1&cursor=next', { headers: { 'X-Account-Id': member.id } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  assert.deepEqual(await response.json(), {
+    data: [{ ...samplePost, savedByMe: true }],
+    meta: { requestId: response.headers.get('X-Request-Id'), nextCursor: 'opaque-saved-cursor', hasMore: true },
+  });
+  assert.deepEqual(client.calls, [
+    ['setSaved', member, postId, true], ['setSaved', member, postId, false], ['listSaved', member, { limit: 1, cursor: 'next' }],
+  ]);
 });
 
 test('like and flat comment HTTP contracts include canonical counts and replay metadata', async (t) => {
