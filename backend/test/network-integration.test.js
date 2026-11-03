@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { migrateAuth } from '../src/migrations/001-auth.js';
 import { migratePosts } from '../src/migrations/002-posts.js';
 import { migrateNetwork } from '../src/migrations/003-network.js';
+import { migrateEngagement } from '../src/migrations/004-engagement.js';
 import { createAuthService } from '../src/modules/auth/service.js';
 import { createNetworkService } from '../src/modules/network/service.js';
 import { createPostService } from '../src/modules/posts/service.js';
@@ -37,6 +38,8 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
   await migratePosts(connection);
   await migrateNetwork(connection);
   await migrateNetwork(connection);
+  await migrateEngagement(connection);
+  await migrateEngagement(connection);
   let currentTime = new Date();
   const now = () => new Date(currentTime);
   const network = createNetworkService({ connection, now, cursorSecret: 'network-integration-cursor-secret' });
@@ -65,6 +68,22 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
   const privateMoment = await publish(owner, 'A private moment');
   const ownMoment = await publish(viewer, 'My own moment');
   const unrelatedMoment = await publish(outsider, 'An unrelated public moment');
+  const privatePostId = privateMoment.post.id;
+  let privateCommentId;
+  let privateCommentCursor;
+
+  async function assertEngagementHidden() {
+    const absentCommentId = privateCommentId ?? new mongoose.Types.ObjectId().toString();
+    const calls = [
+      () => posts.setLike(viewer.user, privatePostId, true),
+      () => posts.setLike(viewer.user, privatePostId, false),
+      () => posts.listComments(viewer.user, privatePostId, { cursor: privateCommentCursor }),
+      () => posts.createComment(viewer.user, privatePostId, { text: 'Access is required' }, randomUUID()),
+      () => posts.updateComment(viewer.user, privatePostId, absentCommentId, { text: 'Access is required', expectedVersion: 0 }),
+      () => posts.deleteComment(viewer.user, privatePostId, absentCommentId),
+    ];
+    for (const call of calls) await assert.rejects(call, fails(404, 'NOT_FOUND'));
+  }
 
   await t.test('private non-followers receive minimal profiles without biography, counts, posts or photo bytes', async () => {
     const profile = await network.getProfile(viewer.user, owner.user.id);
@@ -80,6 +99,7 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     await assert.rejects(posts.listUser(viewer.user, owner.user.id, {}), fails(404, 'NOT_FOUND'));
     await assert.rejects(posts.getPost(viewer.user, privateMoment.post.id), fails(404, 'NOT_FOUND'));
     await assert.rejects(posts.getImage(viewer.user, privateMoment.asset.id), fails(404, 'NOT_FOUND'));
+    await assertEngagementHidden();
     const self = await network.getProfile(owner.user, owner.user.id);
     assert.equal(self.canViewContent, true);
     assert.equal(self.isSelf, true);
@@ -100,6 +120,7 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     assert.equal((await network.listRequests(outsider.user, {})).items.length, 0);
     assert.equal((await network.getProfile(viewer.user, owner.user.id)).relationship.followingStatus, 'pending');
     await assert.rejects(posts.getPost(viewer.user, privateMoment.post.id), fails(404, 'NOT_FOUND'));
+    await assertEngagementHidden();
     await assert.rejects(network.acceptRequest(outsider.user, viewer.user.id), fails(404, 'NOT_FOUND'));
   });
 
@@ -133,6 +154,90 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     assert.deepEqual(outsiderFeed.items.map((post) => post.id), [unrelatedMoment.post.id]);
   });
 
+  await t.test('approved followers can like and unlike a private post with retry-safe counts across post views', async () => {
+    function engagement({ likedByMe, likeCount, commentCount }) {
+      return { likedByMe, likeCount, commentCount };
+    }
+    assert.deepEqual(engagement(await posts.getPost(viewer.user, privatePostId)), { likedByMe: false, likeCount: 0, commentCount: 0 });
+    const likes = await Promise.all([
+      posts.setLike(viewer.user, privatePostId, true),
+      posts.setLike(viewer.user, privatePostId, true),
+    ]);
+    for (const like of likes) assert.deepEqual(like, { likedByMe: true, likeCount: 1 });
+    assert.deepEqual(engagement(await posts.getPost(owner.user, privatePostId)), { likedByMe: false, likeCount: 1, commentCount: 0 });
+    const feedPost = (await posts.listFollowing(viewer.user, {})).items.find(({ id }) => id === privatePostId);
+    const profilePost = (await posts.listUser(viewer.user, owner.user.id, {})).items.find(({ id }) => id === privatePostId);
+    for (const post of [feedPost, profilePost]) {
+      assert.deepEqual(engagement(post), { likedByMe: true, likeCount: 1, commentCount: 0 });
+    }
+    for (const removed of await Promise.all([
+      posts.setLike(viewer.user, privatePostId, false),
+      posts.setLike(viewer.user, privatePostId, false),
+    ])) assert.deepEqual(removed, { likedByMe: false, likeCount: 0 });
+    await posts.setLike(viewer.user, privatePostId, true);
+  });
+
+  await t.test('flat comments are paginated, replay-safe and editable only by their author', async () => {
+    const key = randomUUID();
+    const input = { text: 'A viewer comment' };
+    await assert.rejects(async () => posts.createComment(viewer.user, privatePostId, { text: '  ' }, key), fails(422, 'VALIDATION_ERROR'));
+    await assert.rejects(async () => posts.createComment(viewer.user, privatePostId, { ...input, parentId: privatePostId }, key), fails(422, 'VALIDATION_ERROR'));
+    const created = await posts.createComment(viewer.user, privatePostId, input, key);
+    privateCommentId = created.comment.id;
+    assert.equal(created.replayed, false);
+    assert.equal(created.commentCount, 1);
+    assert.equal(created.comment.text, input.text);
+    assert.equal(created.comment.author.id, viewer.user.id);
+    assert.equal(created.comment.author.email, undefined);
+    assert.equal(created.comment.canManage, true);
+    const replay = await posts.createComment(viewer.user, privatePostId, input, key);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.comment.id, privateCommentId);
+    assert.equal(replay.commentCount, 1);
+    await assert.rejects(posts.createComment(viewer.user, privatePostId, { text: 'Changed retry body' }, key), fails(409, 'IDEMPOTENCY_CONFLICT'));
+
+    const edit = { text: 'An edited comment', expectedVersion: created.comment.version };
+    await assert.rejects(posts.updateComment(owner.user, privatePostId, privateCommentId, edit), fails(403, 'FORBIDDEN'));
+    await assert.rejects(posts.deleteComment(owner.user, privatePostId, privateCommentId), fails(403, 'FORBIDDEN'));
+    const updated = await posts.updateComment(viewer.user, privatePostId, privateCommentId, edit);
+    assert.equal(updated.comment.text, edit.text);
+    assert.equal(updated.comment.version, edit.expectedVersion + 1);
+    assert.equal(updated.commentCount, 1);
+    await assert.rejects(posts.updateComment(viewer.user, privatePostId, privateCommentId, edit), fails(409, 'VERSION_CONFLICT'));
+
+    const second = await posts.createComment(owner.user, privatePostId, { text: 'An owner comment' }, randomUUID());
+    const firstPage = await posts.listComments(viewer.user, privatePostId, { limit: 1 });
+    privateCommentCursor = firstPage.nextCursor;
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(firstPage.commentCount, 2);
+    const nextPage = await posts.listComments(viewer.user, privatePostId, { limit: 1, cursor: privateCommentCursor });
+    assert.equal(nextPage.hasMore, false);
+    assert.deepEqual(new Set([...firstPage.items, ...nextPage.items].map(({ id }) => id)), new Set([privateCommentId, second.comment.id]));
+    await assert.rejects(posts.listComments(viewer.user, ownMoment.post.id, { cursor: privateCommentCursor }), fails(400, 'INVALID_CURSOR'));
+    const ownerView = await posts.listComments(owner.user, privatePostId, {});
+    assert.equal(ownerView.items.find(({ id }) => id === privateCommentId).canManage, false);
+    assert.equal((await posts.getPost(viewer.user, privatePostId)).commentCount, 2);
+  });
+
+  await t.test('disabled comments remain visible and editable, reject new comments and allow author deletion', async () => {
+    const post = await posts.getPost(owner.user, privatePostId);
+    await posts.updatePost(owner.user, privatePostId, { expectedVersion: post.version, commentsEnabled: false });
+    await assert.rejects(
+      posts.createComment(viewer.user, privatePostId, { text: 'A disabled comment' }, randomUUID()),
+      fails(409, 'COMMENTS_DISABLED'),
+    );
+    const { items } = await posts.listComments(owner.user, privatePostId, {});
+    assert.equal(items.length, 2);
+    const original = items.find(({ canManage }) => canManage);
+    const updated = await posts.updateComment(owner.user, privatePostId, original.id, { text: 'Still editable', expectedVersion: original.version });
+    assert.equal(updated.comment.text, 'Still editable');
+    assert.deepEqual(await posts.deleteComment(owner.user, privatePostId, original.id), { commentCount: 1 });
+    assert.deepEqual(await posts.deleteComment(owner.user, privatePostId, original.id), { commentCount: 1 });
+    const updatedPost = await posts.getPost(owner.user, privatePostId);
+    assert.equal(updatedPost.commentCount, 1);
+    await posts.updatePost(owner.user, privatePostId, { expectedVersion: updatedPost.version, commentsEnabled: true });
+  });
+
   await t.test('follower removal immediately revokes profile content, direct posts, Following and image bytes', async () => {
     await network.removeFollower(owner.user, viewer.user.id);
     await network.removeFollower(owner.user, viewer.user.id);
@@ -140,6 +245,10 @@ test('real MongoDB profiles, member search, follow requests, Following feed and 
     await assert.rejects(posts.listUser(viewer.user, owner.user.id, {}), fails(404, 'NOT_FOUND'));
     await assert.rejects(posts.getPost(viewer.user, privateMoment.post.id), fails(404, 'NOT_FOUND'));
     await assert.rejects(posts.getImage(viewer.user, privateMoment.asset.id), fails(404, 'NOT_FOUND'));
+    await assertEngagementHidden();
+    const ownerView = await posts.getPost(owner.user, privatePostId);
+    assert.equal(ownerView.likeCount, 1);
+    assert.equal(ownerView.commentCount, 1);
     assert.equal((await posts.listFollowing(viewer.user, { limit: 10 })).items.some((post) => post.id === privateMoment.post.id), false);
   });
 

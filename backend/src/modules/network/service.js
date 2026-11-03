@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { HttpError } from '../../shared/http-error.js';
+import { lockMembers } from '../../shared/lock-members.js';
 import { createNetworkCursors } from './cursor.js';
 import { invalid, memberId, pageQuery } from './validation.js';
 
@@ -44,17 +45,7 @@ export function createNetworkService({ connection, now = () => new Date(), curso
     if (!viewer || viewer.status !== 'active') throw restricted();
     const actorId = memberId(viewer.id);
     if (actorId.equals(targetId)) invalid('userId', 'SELF_FOLLOW');
-    const ids = [actorId, targetId].sort((a, b) => a.toHexString().localeCompare(b.toHexString()));
-    const members = new Map();
-    // All graph and privacy mutations write these shared guards in stable ID
-    // order, so transaction retries re-read the current account/privacy state.
-    for (const id of ids) {
-      const member = await users.findOneAndUpdate({ _id: id, status: 'active' }, { $inc: { policyVersion: 1 } },
-        { session, returnDocument: 'after', projection });
-      if (!member) throw id.equals(actorId) ? restricted() : notFound();
-      members.set(id.toHexString(), member);
-    }
-    return { actor: members.get(actorId.toHexString()), target: members.get(targetId.toHexString()) };
+    return lockMembers(users, actorId, targetId, { session, projection, restricted, notFound });
   }
 
   async function graphChange(viewer, targetId, work) {

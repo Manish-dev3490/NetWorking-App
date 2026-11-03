@@ -3,6 +3,7 @@ import Icon from '../../components/Icon.jsx';
 import { apiRequest } from '../../services/api.js';
 import { describeError } from '../auth/form-utils.js';
 import RealPostCard from './RealPostCard.jsx';
+import { observeEngagement } from './post-engagement.js';
 import './posts.css';
 
 export default function PostFeed({ user, scope = 'recent', memberId, revision = 0, onChanged, onOpenPost, onOpenProfile, onCreate, onFindMembers, onAccessLost, query = '' }) {
@@ -14,12 +15,15 @@ export default function PostFeed({ user, scope = 'recent', memberId, revision = 
   const requestRef = useRef(null);
   const busyRef = useRef(false);
   const failedRequestRef = useRef(null);
+  const engagementDuringLoadRef = useRef(new Map());
 
   async function load(cursor, replace = false) {
     if (busyRef.current && !replace) return;
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
+    const engagementDuringLoad = new Map();
+    engagementDuringLoadRef.current = engagementDuringLoad;
     failedRequestRef.current = null;
     busyRef.current = true; setPending(true); setError('');
     if (replace) { setPosts([]); setHasMore(false); setNextCursor(null); }
@@ -29,8 +33,9 @@ export default function PostFeed({ user, scope = 'recent', memberId, revision = 
       const path = scope === 'profile' ? `users/${memberId}/posts` : scope === 'own' ? 'me/posts' : scope === 'following' ? 'posts/following' : 'posts/recent';
       const response = await apiRequest(`${path}?${params}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
+      const entries = response.data.map((post) => ({ ...post, ...engagementDuringLoad.get(post.id) }));
       setPosts((previous) => {
-        const combined = replace ? response.data : [...previous, ...response.data];
+        const combined = replace ? entries : [...previous, ...entries];
         return [...new Map(combined.map((post) => [post.id, post])).values()];
       });
       setNextCursor(response.meta?.nextCursor ?? null);
@@ -45,7 +50,10 @@ export default function PostFeed({ user, scope = 'recent', memberId, revision = 
         setError(describeError(failure));
       }
     } finally {
-      if (!controller.signal.aborted) { setPending(false); busyRef.current = false; }
+      if (!controller.signal.aborted) {
+        engagementDuringLoad.clear();
+        setPending(false); busyRef.current = false;
+      }
     }
   }
 
@@ -58,6 +66,14 @@ export default function PostFeed({ user, scope = 'recent', memberId, revision = 
     void load(null, true);
     return () => requestRef.current?.abort();
   }, [scope, memberId, user.id, revision]);
+
+  useEffect(() => observeEngagement(user.id, (postId, summary) => {
+    if (busyRef.current) {
+      const pending = engagementDuringLoadRef.current;
+      pending.set(postId, { ...pending.get(postId), ...summary });
+    }
+    setPosts((current) => current.map((post) => post.id === postId ? { ...post, ...summary } : post));
+  }), [user.id]);
 
   const normalizedQuery = query.trim().toLowerCase().replace(/^#/, '');
   const visiblePosts = posts.filter((post) => !normalizedQuery || [post.caption, post.author.displayName, post.author.username, ...post.hashtags]

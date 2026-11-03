@@ -6,6 +6,7 @@ export const MAX_MEDIA_PER_POST = 10;
 export const MAX_READY_UPLOADS = 20;
 export const MAX_MEMBER_IMAGES = 100;
 export const MAX_MEMBER_BYTES = 50 * 1024 * 1024;
+export const MAX_COMMENT_LENGTH = 1000;
 
 export function mediaPurpose(value = 'post') {
   if (!['post', 'avatar'].includes(value)) invalid('purpose');
@@ -98,6 +99,14 @@ export function validateEdit(input) {
   }
   if (!Object.keys(fields).length && !mediaAltText) invalid('body', 'EMPTY_UPDATE');
   return { expectedVersion: input.expectedVersion, fields, mediaAltText };
+}
+
+export function validateComment(input, editing = false) {
+  strictObject(input, editing ? ['text', 'expectedVersion'] : ['text']);
+  const value = text(input.text, 'text', MAX_COMMENT_LENGTH);
+  if (!value) invalid('text', 'REQUIRED');
+  if (editing && (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0)) invalid('expectedVersion');
+  return { text: value, expectedVersion: input.expectedVersion };
 }
 
 export function validateProcessedImage(input) {

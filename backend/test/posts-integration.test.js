@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import sharp from 'sharp';
 import { migrateAuth } from '../src/migrations/001-auth.js';
 import { migratePosts } from '../src/migrations/002-posts.js';
+import { migrateEngagement } from '../src/migrations/004-engagement.js';
 import { createAuthService } from '../src/modules/auth/service.js';
 import { createPostService } from '../src/modules/posts/service.js';
 
@@ -35,6 +36,7 @@ test('real MongoDB photo storage, publication, visibility and cleanup lifecycle'
   await migrateAuth(connection);
   await migratePosts(connection);
   await migratePosts(connection);
+  await migrateEngagement(connection);
   let currentTime = new Date();
   const service = createPostService({ connection, now: () => new Date(currentTime), cursorSecret: 'posts-integration-cursor-secret' });
   const auth = createAuthService({ connection });
@@ -207,7 +209,19 @@ test('real MongoDB photo storage, publication, visibility and cleanup lifecycle'
     await users.updateOne({ _id: objectId(alice.id) }, { $set: { visibility: 'public' } });
   });
 
-  await t.test('deletion removes photo bytes immediately while preserving publish tombstones', async () => {
+  await t.test('post deletion removes photo bytes, likes and comments while preserving the publish tombstone', async () => {
+    const id = objectId(firstPost.id);
+    const likes = connection.db.collection('post_likes');
+    const comments = connection.db.collection('post_comments');
+    const commentKey = randomUUID();
+    const commentInput = { text: 'A comment to remove' };
+    const { comment } = await service.createComment(bob, firstPost.id, commentInput, commentKey);
+    assert.deepEqual(await service.deleteComment(bob, firstPost.id, comment.id), { commentCount: 0 });
+    await assert.rejects(service.createComment(bob, firstPost.id, commentInput, commentKey), fails(409, 'RESOURCE_DELETED'));
+    await service.createComment(bob, firstPost.id, { text: 'A live comment to remove' }, randomUUID());
+    await service.setLike(bob, firstPost.id, true);
+    assert.equal(await likes.countDocuments({ postId: id }), 1);
+    assert.equal(await comments.countDocuments({ postId: id }), 2);
     await assert.rejects(service.removeUpload(alice, firstAsset.id), fails(409, 'ASSET_IN_USE'));
     await service.deletePost(alice, firstPost.id);
     await service.deletePost(alice, firstPost.id);
@@ -215,6 +229,9 @@ test('real MongoDB photo storage, publication, visibility and cleanup lifecycle'
     await assert.rejects(service.getImage(alice, firstAsset.id), fails(404, 'NOT_FOUND'));
     assert.equal(await images.findOne({ _id: objectId(firstAsset.id) }), null);
     assert.equal(await assets.findOne({ _id: objectId(firstAsset.id) }), null);
+    assert.equal(await likes.countDocuments({ postId: id }), 0);
+    assert.equal(await comments.countDocuments({ postId: id }), 0);
+    await assert.rejects(service.listComments(bob, firstPost.id, {}), fails(404, 'NOT_FOUND'));
     assert.equal((await posts.findOne({ _id: objectId(firstPost.id) })).status, 'deleted');
     await assert.rejects(service.publish(alice, firstInput, firstKey), fails(409, 'RESOURCE_DELETED'));
     assert.equal(await posts.countDocuments({ _id: objectId(firstPost.id) }), 1);

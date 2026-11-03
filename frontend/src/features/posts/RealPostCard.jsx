@@ -5,6 +5,7 @@ import { apiRequest } from '../../services/api.js';
 import { describeError } from '../auth/form-utils.js';
 import { countCharacters, formatPostDate, normalizedTags, validatePostFields } from './post-utils.js';
 import { PostEditorContext } from './PostEditorContext.js';
+import PostReactions from './PostReactions.jsx';
 import './posts.css';
 
 export function EditPost({ post, user, onClose, onChanged }) {
@@ -43,7 +44,7 @@ export function EditPost({ post, user, onClose, onChanged }) {
   </dialog>;
 }
 
-export default function RealPostCard({ post, user, onChanged, onOpenPost, onOpenProfile = () => {}, detail = false }) {
+export default function RealPostCard({ post, user, onChanged, onOpenPost, onOpenProfile = () => {}, onAccessLost = onChanged, detail = false }) {
   const openPostEditor = useContext(PostEditorContext);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -96,7 +97,9 @@ export default function RealPostCard({ post, user, onChanged, onOpenPost, onOpen
     <div className="real-post-image">{!failed && photo ? <img src={photo.contentUrl} alt={photo.altText || `Photo shared by ${post.author.displayName}`} loading="lazy" onError={() => setFailed(true)} /> : <div className="real-image-fallback"><Icon name="leaf" size={35} /><p>This photo is unavailable.</p><button type="button" className="text-button" onClick={() => setFailed(false)}>Try again</button></div>}
       {post.media.length > 1 && <><span className="real-image-count" aria-live="polite">{photoIndex + 1} / {post.media.length}</span><button type="button" className="real-carousel-arrow previous" aria-label="Previous photo" disabled={photoIndex === 0} onClick={() => setPhotoIndex((index) => index - 1)}><Icon name="chevron-left" /></button><button type="button" className="real-carousel-arrow next" aria-label="Next photo" disabled={photoIndex === post.media.length - 1} onClick={() => setPhotoIndex((index) => index + 1)}><Icon name="chevron-right" /></button><div className="real-carousel-dots">{post.media.map((entry, index) => <button type="button" key={entry.assetId} aria-label={`Show photo ${index + 1} of ${post.media.length}`} aria-current={index === photoIndex ? 'true' : undefined} onClick={() => setPhotoIndex(index)}><span /></button>)}</div></>}
     </div>
-    <div className="real-post-body">{post.caption && <p className="real-post-caption">{post.caption}</p>}{post.hashtags.length > 0 && <div className="real-post-tags">{post.hashtags.map((tag) => <span key={tag}>#{tag}</span>)}</div>}<div className="real-post-footer">{!detail && <button type="button" className="text-button" onClick={() => onOpenPost(post.id)}>Open post<Icon name="chevron-right" size={14} /></button>}<button type="button" className="icon-button" aria-label="Copy post link" onClick={share}><Icon name="share" size={19} /></button></div>
+    <div className="real-post-body">{post.caption && <p className="real-post-caption">{post.caption}</p>}{post.hashtags.length > 0 && <div className="real-post-tags">{post.hashtags.map((tag) => <span key={tag}>#{tag}</span>)}</div>}
+      <PostReactions post={post} user={user} detail={detail} onOpenPost={onOpenPost} onAccessLost={onAccessLost} />
+      <div className="real-post-footer">{!detail && <button type="button" className="text-button" onClick={() => onOpenPost(post.id)}>Open post<Icon name="chevron-right" size={14} /></button>}<button type="button" className="icon-button" aria-label="Copy post link" onClick={share}><Icon name="share" size={19} /></button></div>
       {message && <p className="post-inline-notice" role="status">{message}</p>}{error && <p className="post-inline-error" role="alert">{error}</p>}
       {confirmDelete && <div className="delete-post-confirm" role="group" aria-label="Confirm post deletion"><strong>Delete this post?</strong><p>Your photos and caption will be removed.</p><div><button type="button" className="button button-secondary" onClick={() => setConfirmDelete(false)} disabled={deleting}>Keep post</button><button type="button" className="button button-danger" onClick={remove} disabled={deleting}>{deleting ? 'Deleting…' : 'Delete post'}</button></div></div>}
     </div>

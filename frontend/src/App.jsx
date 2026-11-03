@@ -202,7 +202,7 @@ export default function App() {
     <button type="button" className="button button-primary" onClick={logout} disabled={loggingOut}>{loggingOut ? 'Logging out…' : 'Log out'}</button>
   </main>;
 
-  const postMatch = /^\/p\/([0-9a-f]{24})$/i.exec(path);
+  const postId = /^\/p\/([0-9a-f]{24})$/i.exec(path)?.[1].toLowerCase();
   const memberMatch = /^\/u\/([0-9a-f]{24})$/i.exec(path);
   const openPost = (id) => navigate(`/p/${id}`, { keepHash: false });
   const openProfile = (id) => navigate(`/u/${id}`, { keepHash: false });
@@ -214,12 +214,12 @@ export default function App() {
 
   return <PostEditorContext.Provider value={openPostEditor}>
     {accountError && <div className="account-feedback" role="alert"><span>{accountError}</span><button className="icon-button" type="button" aria-label="Dismiss account message" onClick={() => setAccountError('')}><Icon name="close" size={17} /></button></div>}
-    <div hidden={['/profile', '/members', '/requests'].includes(path) || Boolean(postMatch) || Boolean(memberMatch)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onFindMembers={findMembers} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} /></div>
+    <div hidden={['/profile', '/members', '/requests'].includes(path) || Boolean(postId) || Boolean(memberMatch)}><HomePage key={user.id} user={user} onEditProfile={() => navigate('/profile', { keepHash: false })} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onFindMembers={findMembers} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} /></div>
     {path === '/profile' && <ProfilePage key={user.id} user={user} onSaved={profileSaved} onBack={() => navigate('/')} onLogout={logout} loggingOut={loggingOut} onCreate={createPost} onOpenPost={openPost} onOpenProfile={openProfile} onRequests={followRequests} postRevision={postRevision} onPostChanged={postsChanged} />}
     {path === '/members' && <MemberSearch key={user.id} {...networkProps} />}
     {path === '/requests' && <FollowRequests key={user.id} {...networkProps} />}
     {memberMatch && <MemberProfile key={`${user.id}:${memberMatch[1]}`} {...networkProps} memberId={memberMatch[1]} onEdit={() => navigate('/profile', { keepHash: false })} onOpenPost={openPost} onCreate={createPost} />}
-    {postMatch && <PostDetail key={`${user.id}:${postMatch[1]}`} postId={postMatch[1]} user={user} onBack={() => navigate('/', { keepHash: false })} onChanged={postsChanged} onOpenProfile={openProfile} revision={postRevision} />}
+    {postId && <PostDetail key={`${user.id}:${postId}`} postId={postId} user={user} onBack={() => navigate('/', { keepHash: false })} onChanged={postsChanged} onOpenProfile={openProfile} revision={postRevision} />}
     {composerAccountId === user.id && <PostComposer key={user.id} user={user} onClose={() => { setComposerAccountId(null); postsChanged(); }} onPublished={(post) => { setComposerAccountId(null); postsChanged(); openPost(post.id); }} />}
     {postEditor?.accountId === user.id && <EditPost key={`${postEditor.accountId}:${postEditor.post.id}`} post={postEditor.post} user={user} onClose={() => setPostEditor(null)} onChanged={postsChanged} />}
   </PostEditorContext.Provider>;

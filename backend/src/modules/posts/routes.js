@@ -10,7 +10,7 @@ let activeUploads = 0;
 function key(req) {
   const value = req.get('Idempotency-Key');
   if (!value || !uuid.test(value)) {
-    const error = new HttpError(422, 'VALIDATION_ERROR', 'This upload or post needs a valid request key.');
+    const error = new HttpError(422, 'VALIDATION_ERROR', 'This request needs a valid retry key.');
     error.fields = [{ path: 'idempotencyKey', code: 'INVALID_FORMAT' }];
     throw error;
   }
@@ -127,6 +127,31 @@ export function createPostRouter({ authService, postService }) {
     respond(req, res, result.post, result.replayed ? 200 : 201);
   });
   router.get('/posts/:postId', async (req, res) => respond(req, res, await postService.getPost(req.viewer, req.params.postId)));
+  router.put('/posts/:postId/like', async (req, res) => {
+    emptyBody(req);
+    respond(req, res, await postService.setLike(req.viewer, req.params.postId, true));
+  });
+  router.delete('/posts/:postId/like', async (req, res) => {
+    emptyBody(req);
+    respond(req, res, await postService.setLike(req.viewer, req.params.postId, false));
+  });
+  router.get('/posts/:postId/comments', async (req, res) => {
+    const { items, nextCursor, hasMore, commentCount } = await postService.listComments(req.viewer, req.params.postId, pageOptions(req));
+    respond(req, res, items, 200, { nextCursor, hasMore, commentCount });
+  });
+  router.post('/posts/:postId/comments', async (req, res) => {
+    const { comment, commentCount, replayed } = await postService.createComment(req.viewer, req.params.postId, req.body, key(req));
+    if (replayed) res.set('Idempotency-Replayed', 'true');
+    respond(req, res, comment, replayed ? 200 : 201, { commentCount });
+  });
+  router.patch('/posts/:postId/comments/:commentId', async (req, res) => {
+    const { comment, commentCount } = await postService.updateComment(req.viewer, req.params.postId, req.params.commentId, req.body);
+    respond(req, res, comment, 200, { commentCount });
+  });
+  router.delete('/posts/:postId/comments/:commentId', async (req, res) => {
+    emptyBody(req);
+    respond(req, res, await postService.deleteComment(req.viewer, req.params.postId, req.params.commentId));
+  });
   router.patch('/posts/:postId', async (req, res) => respond(req, res, await postService.updatePost(req.viewer, req.params.postId, req.body)));
   router.delete('/posts/:postId', async (req, res) => {
     emptyBody(req);

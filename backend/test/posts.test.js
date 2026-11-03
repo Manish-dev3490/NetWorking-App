@@ -14,6 +14,8 @@ const member = {
 const sessionToken = 'test-post-session';
 const assetId = '507f1f77bcf86cd799439012';
 const postId = '507f1f77bcf86cd799439013';
+const commentId = '507f1f77bcf86cd799439014';
+const replayKey = '11111111-1111-4111-8111-111111111111';
 const samplePost = {
   id: postId, author: { id: member.id, username: member.username, displayName: member.displayName },
   caption: 'A published moment', hashtags: ['moments'],
@@ -32,12 +34,32 @@ async function serve(t, { active = true } = {}) {
     },
     async removeUpload(viewer, id) { calls.push(['removeUpload', viewer, id]); },
     async getImage(viewer, id) { calls.push(['getImage', viewer, id]); return { data: image, contentType: 'image/webp', sizeBytes: image.length }; },
-    async publish(viewer, input, key) { calls.push(['publish', viewer, input, key]); return { post: samplePost, replayed: key === '11111111-1111-4111-8111-111111111111' }; },
+    async publish(viewer, input, key) { calls.push(['publish', viewer, input, key]); return { post: samplePost, replayed: key === replayKey }; },
     async getPost(viewer, id) { calls.push(['getPost', viewer, id]); return samplePost; },
     async listRecent(viewer, query) { calls.push(['listRecent', viewer, query]); return { items: [samplePost], nextCursor: 'opaque-next', hasMore: true }; },
     async listOwn(viewer, query) { calls.push(['listOwn', viewer, query]); return { items: [samplePost], nextCursor: null, hasMore: false }; },
     async updatePost(viewer, id, input) { calls.push(['updatePost', viewer, id, input]); return { ...samplePost, caption: input.caption, version: 1 }; },
     async deletePost(viewer, id) { calls.push(['deletePost', viewer, id]); },
+    async setLike(viewer, id, liked) {
+      calls.push(['setLike', viewer, id, liked]);
+      return { likedByMe: liked, likeCount: Number(liked) };
+    },
+    async listComments(viewer, id, query) {
+      calls.push(['listComments', viewer, id, query]);
+      return { items: [{ id: commentId }], nextCursor: 'opaque-comment-cursor', hasMore: true, commentCount: 2 };
+    },
+    async createComment(viewer, id, input, key) {
+      calls.push(['createComment', viewer, id, input, key]);
+      return { comment: { id: commentId, text: input.text }, commentCount: 1, replayed: key === replayKey };
+    },
+    async updateComment(viewer, id, target, input) {
+      calls.push(['updateComment', viewer, id, target, input]);
+      return { comment: { id: target, text: input.text, version: input.expectedVersion + 1 }, commentCount: 1 };
+    },
+    async deleteComment(viewer, id, target) {
+      calls.push(['deleteComment', viewer, id, target]);
+      return { commentCount: 0 };
+    },
   };
   const authService = {
     async resolveSession(token) {
@@ -184,7 +206,7 @@ test('published media delivery authenticates before returning verified image byt
 test('post routes return request envelopes, pagination and idempotent publication semantics', async (t) => {
   const client = await serve(t);
   const input = { caption: 'A published moment', hashtags: ['moments'], media: [{ assetId, altText: 'A small image' }] };
-  for (const [key, status] of [[randomUUID(), 201], ['11111111-1111-4111-8111-111111111111', 200]]) {
+  for (const [key, status] of [[randomUUID(), 201], [replayKey, 200]]) {
     const response = await client.request('/posts', { method: 'POST', body: input, headers: await client.mutationHeaders({ 'Idempotency-Key': key }) });
     assert.equal(response.status, status);
     assert.deepEqual((await response.json()).data, samplePost);
@@ -218,4 +240,63 @@ test('post modifications require account preconditions and delegate versioned ed
   assert.equal(removed.status, 204);
   assert.equal(await removed.text(), '');
   assert.ok(client.calls.some(([name]) => name === 'deletePost'));
+});
+
+test('like and flat comment routes require a session and protect mutations against stale accounts and CSRF', async (t) => {
+  const client = await serve(t);
+  const like = `/posts/${postId}/like`;
+  const comments = `/posts/${postId}/comments`;
+  const target = `${comments}/${commentId}`;
+  const contentType = { 'Content-Type': 'application/json' };
+  await expectError(await client.request(comments, { anonymous: true }), 401, 'AUTH_REQUIRED');
+  for (const [path, method] of [[like, 'PUT'], [like, 'DELETE'], [comments, 'POST'], [target, 'PATCH'], [target, 'DELETE']]) {
+    await expectError(await client.request(path, { method, headers: contentType }), 403, 'CSRF_REJECTED');
+    const headers = await client.mutationHeaders({ ...contentType, 'X-Account-Id': '507f1f77bcf86cd799439099' });
+    await expectError(await client.request(path, { method, headers }), 409, 'ACCOUNT_CHANGED');
+  }
+  assert.deepEqual(client.calls, []);
+});
+
+test('like and flat comment HTTP contracts include canonical counts and replay metadata', async (t) => {
+  const client = await serve(t);
+  const like = `/posts/${postId}/like`;
+  const comments = `/posts/${postId}/comments`;
+  const target = `${comments}/${commentId}`;
+  const headers = await client.mutationHeaders({ 'Content-Type': 'application/json' });
+  await expectError(await client.request(like, { method: 'PUT', body: { liked: true }, headers }), 422, 'VALIDATION_ERROR');
+  for (const [method, likedByMe] of [['PUT', true], ['DELETE', false]]) {
+    const response = await client.request(like, { method, headers });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).data, { likedByMe, likeCount: Number(likedByMe) });
+  }
+  const page = await client.request(`${comments}?limit=1`);
+  assert.equal(page.status, 200);
+  const { data, meta } = await page.json();
+  assert.deepEqual(data, [{ id: commentId }]);
+  assert.equal(meta.nextCursor, 'opaque-comment-cursor');
+  assert.equal(meta.hasMore, true);
+  assert.equal(meta.commentCount, 2);
+  assert.equal(meta.requestId, page.headers.get('X-Request-Id'));
+
+  const body = { text: 'A comment' };
+  await expectError(await client.request(comments, { method: 'POST', body, headers }), 422, 'VALIDATION_ERROR');
+  for (const [key, status] of [[randomUUID(), 201], [replayKey, 200]]) {
+    const created = await client.request(comments, { method: 'POST', body, headers: { ...headers, 'Idempotency-Key': key } });
+    assert.equal(created.status, status);
+    assert.equal(created.headers.get('Idempotency-Replayed'), status === 200 ? 'true' : null);
+    const payload = await created.json();
+    assert.deepEqual(payload.data, { id: commentId, text: body.text });
+    assert.equal(payload.meta.commentCount, 1);
+  }
+  const edited = await client.request(target, { method: 'PATCH', body: { text: 'Edited text', expectedVersion: 0 }, headers });
+  assert.equal(edited.status, 200);
+  const payload = await edited.json();
+  assert.deepEqual(payload.data, { id: commentId, text: 'Edited text', version: 1 });
+  assert.equal(payload.meta.commentCount, 1);
+  const deleted = await client.request(target, { method: 'DELETE', headers });
+  assert.equal(deleted.status, 200);
+  assert.deepEqual((await deleted.json()).data, { commentCount: 0 });
+  assert.deepEqual(client.calls.map(([name, viewer, id]) => [name, viewer.id, id]), [
+    'setLike', 'setLike', 'listComments', 'createComment', 'createComment', 'updateComment', 'deleteComment',
+  ].map((name) => [name, member.id, postId]));
 });

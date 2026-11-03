@@ -50,7 +50,24 @@ All post/photo mutations require the session, CSRF protections and captured `X-A
 | `PATCH /posts/:id` | Owner edit with `expectedVersion` |
 | `DELETE /posts/:id` | Removes an owned post and its photos |
 
-Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed. Likes, comments and saved-post persistence remain future work.
+Captions allow 2,200 Unicode characters, photo descriptions 500, and hashtags 20 unique values of up to 50 characters. The complete post JSON must also fit the API's 32 KiB limit; the composer checks its encoded size before uploading any photos and asks the member to shorten the text if needed. List requests accept `limit` (1–20) and `cursor`; continuation cursors expire after 24 hours and are tied to the viewer and feed. Saved-post persistence remains future work.
+
+## Post likes and comments
+
+Members can like or unlike a visible post from any feed, member profile or the post detail page. Post responses include `likedByMe`, `likeCount` and `commentCount`. Each member can like a post once, and repeated like or unlike requests return the current state.
+
+Post detail shows a paginated, flat comment list. Comments allow up to 1,000 Unicode characters after trimming and normalization. Comment authors can edit or delete their own comments. An edit includes the version loaded by the author so a concurrent edit returns `409 VERSION_CONFLICT`. If the post has commenting disabled, members who can view it can still read its existing comments and manage their own.
+
+Every engagement request uses the post's existing visibility rules. Private posts and their engagement are accessible to the post author and accepted followers. Pending and revoked followers receive `404`. Mutations use the same session, CSRF and `X-Account-Id` checks as post writes. Comment creation also requires a UUID `Idempotency-Key` for safe retries.
+
+| Method and path | Behavior |
+| --- | --- |
+| `PUT /posts/:id/like` | Likes a visible post and returns the current like state and count |
+| `DELETE /posts/:id/like` | Unlikes a visible post and returns the current like state and count |
+| `GET /posts/:id/comments` | Lists comments with `limit` and `cursor` |
+| `POST /posts/:id/comments` | Adds a comment with `{ "text": "…" }`; `201` for creation or `200` for a replay |
+| `PATCH /posts/:id/comments/:commentId` | Edits an owned comment with `text` and `expectedVersion` |
+| `DELETE /posts/:id/comments/:commentId` | Removes an owned comment and returns the current comment count |
 
 ## Members and follows
 
@@ -115,7 +132,7 @@ Run the explicit database migration before starting the backend:
 npm.cmd run db:migrate
 ```
 
-Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all three migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
+Migration `001-auth` creates collection validators, unique identity/session/default-collection indexes and the session TTL index. Migration `002-posts` adds post/media validators and lifecycle/feed indexes. Migration `003-network` adds follow validators, unique ordered pairs, relationship/search indexes and profile-photo/policy fields. Migration `004-engagement` adds the like and comment collections and indexes. Migrations record completion in `schema_migrations` and are safe to rerun. They do not delete or repair existing data; duplicate identities or conflicting indexes must be resolved deliberately. The backend requires all four migrations before serving HTTP. Automatic Mongoose collection/index creation remains disabled.
 
 Start these commands in separate terminals:
 
@@ -190,6 +207,7 @@ Inter loads from Google Fonts. Uploaded post photos use the authenticated MongoD
 - `backend/src/migrations/001-auth.js`: explicit auth database schema/index migration.
 - `backend/src/migrations/002-posts.js`: explicit posts/media schema and index migration.
 - `backend/src/migrations/003-network.js`: relationship/search indexes and profile-photo/policy schema.
+- `backend/src/migrations/004-engagement.js`: post like and comment schema and indexes.
 - `backend/src/middleware/`: transport, request IDs, CSRF/rate limits and safe errors.
 - `backend/src/config/`: environment validation and reusable MongoDB connection.
 - `backend/test/`: isolated HTTP/unit tests and optional real-database integration tests.
@@ -205,8 +223,8 @@ Original documents in `docs/` remain read-only:
 
 The database/API documents govern V1 technical scope where older proposals differ. Explicit product-owner decisions override their email-verification and external-object-storage proposals: signup skips verification, and uploaded product photos will be stored in MongoDB Atlas. The source documents themselves have not been changed. This slice combines their Origin/custom-header requirements with signed session-bound CSRF tokens.
 
-Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, transport security, health checks and schema/index migrations.
+Implemented: account creation, login, seven-day sessions, own-profile editing and photos, public/private member profiles, member search, follow/unfollow, private requests with approval/rejection, follower removal, MongoDB photo uploads, post publication, Recent/Following/own feeds, permalinks, caption/hashtag edits, post deletion, likes/unlikes, flat comments with author editing/deletion, transport security, health checks and schema/index migrations.
 
 Product-owner media decisions are implemented above: MongoDB binary storage and 5 MiB limits replace the original external-storage proposal. Image bytes count toward Atlas storage usage. Profiles, follows and the Following feed now form the application's core networking flow.
 
-Password recovery must also be completed before inviting external testers. Persisted engagement and saved items, hashtag search, notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.
+Password recovery must also be completed before inviting external testers. Saved items, hashtag search, notifications, blocking/muting, moderation and text-based AI captions remain future work. Chat, calls, video/reels and stories are later phases. Retention, moderation ownership and launch eligibility remain product decisions.

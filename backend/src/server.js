@@ -7,6 +7,7 @@ import { assertAuthMigration } from './migrations/001-auth.js';
 import { assertPostsMigration } from './migrations/002-posts.js';
 import { createPostService } from './modules/posts/service.js';
 import { assertNetworkMigration } from './migrations/003-network.js';
+import { assertEngagementMigration } from './migrations/004-engagement.js';
 import { createNetworkService } from './modules/network/service.js';
 
 const database = createDatabase();
@@ -80,6 +81,7 @@ async function start() {
     const authService = createAuthService({ connection: database.connection });
     stage = 'posts';
     await assertPostsMigration(database.connection);
+    await assertEngagementMigration(database.connection);
     const postService = createPostService({ connection: database.connection, cursorSecret: config.authSecret });
     stage = 'network';
     await assertNetworkMigration(database.connection);

@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import mongoose from 'mongoose';
 import { HttpError } from '../../shared/http-error.js';
+import { lockMembers } from '../../shared/lock-members.js';
 import { createPostCursors } from './cursor.js';
+import { createEngagement } from './engagement.js';
 import {
   MAX_MEMBER_BYTES, MAX_MEMBER_IMAGES, MAX_READY_UPLOADS, mediaPurpose, objectId, requestKey,
   validateEdit, validateProcessedImage, validatePublish,
@@ -10,6 +12,7 @@ import {
 const DAY = 24 * 60 * 60 * 1000;
 const authorProjection = { _id: 1, usernameNormalized: 1, displayName: 1, avatarAssetId: 1, status: 1, visibility: 1 };
 const unavailable = () => new HttpError(404, 'NOT_FOUND', 'Post or photo not found.');
+const restricted = () => new HttpError(403, 'ACCOUNT_RESTRICTED', 'This account cannot access posts.');
 const quotaError = () => new HttpError(409, 'MEDIA_QUOTA_EXCEEDED', 'Your photo storage limit has been reached. Remove unused uploads or delete a post before adding more.');
 const assetNotReady = () => new HttpError(409, 'ASSET_NOT_READY', 'A selected photo is unavailable or has already been used. Choose the photo again.');
 
@@ -25,7 +28,7 @@ function canRead(post, author, viewerId, accepted = false) {
     && (post.authorId.equals(viewerId) || author.visibility === 'public' || accepted);
 }
 
-function postDto(post, author, viewerId) {
+function postDto(post, author, viewerId, likedByMe = false) {
   return {
     id: post._id.toHexString(),
     author: { id: author._id.toHexString(), username: author.usernameNormalized, displayName: author.displayName,
@@ -37,6 +40,7 @@ function postDto(post, author, viewerId) {
     })),
     createdAt: post.createdAt.toISOString(), updatedAt: post.updatedAt.toISOString(),
     version: post.editVersion, canManage: post.authorId.equals(viewerId), commentsEnabled: post.commentsEnabled,
+    likeCount: post.likeCount ?? 0, commentCount: post.commentCount ?? 0, likedByMe,
   };
 }
 
@@ -56,9 +60,10 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
   const images = db.collection('media_images');
   const follows = db.collection('follows');
   const cursors = createPostCursors(cursorSecret, now);
+  const { hasLike, removePostEngagement, ...engagement } = createEngagement({ db, now, cursors, withVisiblePost });
 
   async function activeViewer(viewer, session, write = false) {
-    if (!viewer || viewer.status !== 'active') throw new HttpError(403, 'ACCOUNT_RESTRICTED', 'This account cannot access posts.');
+    if (!viewer || viewer.status !== 'active') throw restricted();
     const id = objectId(viewer.id, 'accountId');
     // All media/post mutations lock the same user document, making concurrent
     // quota checks and active-account checks part of their transaction.
@@ -67,7 +72,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         session, returnDocument: 'after', projection: authorProjection,
       })
       : await users.findOne({ _id: id, status: 'active' }, { session, projection: authorProjection });
-    if (!member) throw new HttpError(403, 'ACCOUNT_RESTRICTED', 'This account cannot access posts.');
+    if (!member) throw restricted();
     return member;
   }
 
@@ -113,6 +118,26 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     return { post, author };
   }
 
+  async function withVisiblePost(viewer, postId, write, work) {
+    const id = objectId(postId, 'postId');
+    if (!viewer || viewer.status !== 'active') throw restricted();
+    const viewerId = objectId(viewer.id, 'accountId');
+    return connection.transaction(async (session) => {
+      if (!write) {
+        const member = await activeViewer(viewer, session);
+        const { post, author } = await visiblePost(member._id, id, session);
+        return work(post, member, session, author);
+      }
+      const post = await posts.findOne({ _id: id, status: 'published' }, { session });
+      if (!post) throw unavailable();
+      const { actor, target } = await lockMembers(users, viewerId, post.authorId, {
+        session, projection: authorProjection, restricted, notFound: unavailable,
+      });
+      if (!await canViewAuthor(actor._id, target, session)) throw unavailable();
+      return work(post, actor, session);
+    }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+  }
+
   async function replay(viewerId, publishKey, requestHash, session) {
     const existing = await posts.findOne({ authorId: viewerId, publishKey }, { session });
     if (!existing) return null;
@@ -120,7 +145,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
     if (existing.status === 'deleted') throw new HttpError(409, 'RESOURCE_DELETED', 'This post was deleted. Start a new post to publish new content.');
     const author = await authorFor(existing, session);
     if (!canRead(existing, author, viewerId)) throw unavailable();
-    return { post: postDto(existing, author, viewerId), replayed: true };
+    return { post: postDto(existing, author, viewerId, await hasLike(existing._id, viewerId, session)), replayed: true };
   }
 
   async function list(viewer, query, scope, targetId) {
@@ -155,7 +180,10 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
       const batch = await posts.aggregate([
         { $match: match }, { $sort: { createdAt: -1, _id: -1 } }, { $limit: batchLimit },
         { $lookup: { from: 'users', localField: 'authorId', foreignField: '_id', pipeline: [{ $project: authorProjection }], as: 'author' } },
-      ]).toArray();
+        { $lookup: { from: 'post_likes', localField: '_id', foreignField: 'postId', pipeline: [
+          { $match: { memberId: member._id } }, { $project: { _id: 1 } },
+        ], as: 'viewerLike' } },
+      ], { readConcern: { level: 'snapshot' } }).toArray();
       if (!batch.length) { hasMore = false; break; }
       // Refresh accepted relationships for this bounded batch. A pending
       // request never grants private content or Following-feed membership.
@@ -173,7 +201,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         if (canRead(candidate, author, member._id, acceptedAuthor)
           && (scope !== 'recent' || author.visibility === 'public')
           && (scope !== 'following' || candidate.authorId.equals(member._id) || acceptedAuthor)) {
-          items.push(postDto(candidate, author, member._id));
+          items.push(postDto(candidate, author, member._id, candidate.viewerLike.length > 0));
         }
         hasMore = index < batch.length - 1 || batch.length === batchLimit;
         if (items.length === limit) break;
@@ -188,6 +216,8 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
   }
 
   return {
+    ...engagement,
+
     async assertCanUpload(viewer, uploadKey, purpose = 'post') {
       const key = requestKey(uploadKey, 'X-Upload-Key');
       const intendedPurpose = mediaPurpose(purpose);
@@ -301,7 +331,8 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
               const asset = byId.get(item.assetId.toHexString());
               return { ...item, width: asset.width, height: asset.height };
             }),
-            status: 'published', editVersion: 0, publishKey, requestHash, createdAt: date, updatedAt: date,
+            status: 'published', editVersion: 0, likeCount: 0, commentCount: 0,
+            publishKey, requestHash, createdAt: date, updatedAt: date,
           };
           const claimed = await assets.updateMany({ _id: { $in: ids }, ownerId: member._id, purpose: 'post', state: 'ready', expiresAt: { $gt: date } }, {
             $set: { state: 'attached', postId: post._id }, $unset: { expiresAt: '' },
@@ -319,10 +350,9 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
       return result;
     },
 
-    async getPost(viewer, postId) {
-      const member = await activeViewer(viewer);
-      const { post, author } = await visiblePost(member._id, objectId(postId, 'postId'));
-      return postDto(post, author, member._id);
+    getPost(viewer, postId) {
+      return withVisiblePost(viewer, postId, false, async (post, member, session, author) =>
+        postDto(post, author, member._id, await hasLike(post._id, member._id, session)));
     },
 
     listRecent(viewer, query = {}) { return list(viewer, query, 'recent'); },
@@ -349,7 +379,7 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
           $set: fields, $inc: { editVersion: 1 },
         }, { session, returnDocument: 'after' });
         if (!updated) throw new HttpError(409, 'VERSION_CONFLICT', 'This post changed elsewhere. Reload it before editing again.');
-        result = postDto(updated, author, member._id);
+        result = postDto(updated, author, member._id, await hasLike(updated._id, member._id, session));
       });
       return result;
     },
@@ -367,7 +397,10 @@ export function createPostService({ connection, now = () => new Date(), cursorSe
         }
         if (post.status === 'deleted') return;
         const ids = post.media.map((item) => item.assetId);
-        await posts.updateOne({ _id: id, status: 'published' }, { $set: { status: 'deleted', deletedAt: now(), updatedAt: now() } }, { session });
+        await posts.updateOne({ _id: id, status: 'published' }, {
+          $set: { status: 'deleted', likeCount: 0, commentCount: 0, deletedAt: now(), updatedAt: now() },
+        }, { session });
+        await removePostEngagement(id, session);
         await images.deleteMany({ _id: { $in: ids } }, { session });
         await assets.deleteMany({ _id: { $in: ids }, ownerId: member._id, postId: id }, { session });
       });
